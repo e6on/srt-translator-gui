@@ -292,7 +292,7 @@ class TranslatorGUI(QWidget):
         
         gst.input_file = input_file
         
-        gst.output_file = f"{input_file.split('.')[0]}_translated.{input_file.split('.')[-1]}"
+        gst.output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
         
         gst.description = self.description_input.toPlainText()
         
