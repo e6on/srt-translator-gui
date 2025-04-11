@@ -203,7 +203,7 @@ class TranslatorGUI(QWidget):
         self.setLayout(main_layout)
         
     def browseFile(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select Input File", "", "All Files (*);;SRT Files (*.srt)")
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Input File", "", "SRT Files (*.srt);;All Files (*)")
         if file_name:
             self.input_file_display.setText(file_name)
     
