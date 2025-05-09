@@ -31,7 +31,7 @@ class TranslatorGUI(QWidget):
         main_layout.setContentsMargins(10, 10, 10, 5)
 
         # Add header
-        header_label = QLabel("Gemini SRT Translator GUI")
+        header_label = QLabel("Gemini SRT Translator v1.8.0 GUI")
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(header_label)
 
@@ -147,23 +147,33 @@ class TranslatorGUI(QWidget):
         
         advanced_layout.addLayout(input_layout)
         
-        checkbox_layout = QHBoxLayout()
-        checkbox_layout.setSpacing(5)
-        checkbox_layout.setContentsMargins(0, 5, 0, 5)
+        checkbox1_layout = QHBoxLayout()
+        checkbox1_layout.setSpacing(5)
+        checkbox1_layout.setContentsMargins(0, 5, 0, 5)
         
         self.free_quota_checkbox = QCheckBox('Free Quota')
         self.free_quota_checkbox.setChecked(True)
-        checkbox_layout.addWidget(self.free_quota_checkbox)
+        checkbox1_layout.addWidget(self.free_quota_checkbox)
 
         self.use_colors_checkbox = QCheckBox('Use Colors')
         self.use_colors_checkbox.setChecked(True)
-        checkbox_layout.addWidget(self.use_colors_checkbox)
+        checkbox1_layout.addWidget(self.use_colors_checkbox)
+        
+        advanced_layout.addLayout(checkbox1_layout)
+        
+        checkbox2_layout = QHBoxLayout()
+        checkbox2_layout.setSpacing(5)
+        checkbox2_layout.setContentsMargins(0, 5, 0, 5)
 
         self.skip_upgrade_checkbox = QCheckBox('Skip Upgrade')
         self.skip_upgrade_checkbox.setChecked(False)
-        checkbox_layout.addWidget(self.skip_upgrade_checkbox)
+        checkbox2_layout.addWidget(self.skip_upgrade_checkbox)
         
-        advanced_layout.addLayout(checkbox_layout)
+        self.error_log_checkbox = QCheckBox('Error log')
+        self.error_log_checkbox.setChecked(False)
+        checkbox2_layout.addWidget(self.error_log_checkbox)
+        
+        advanced_layout.addLayout(checkbox2_layout)
 
         advanced_group.setLayout(advanced_layout)
         right_layout.addWidget(advanced_group)
@@ -240,6 +250,7 @@ class TranslatorGUI(QWidget):
             'model_name': self.model_name_combo.currentText(),
             'start_line': self.start_line_input.text(),
             'skip_upgrade': self.skip_upgrade_checkbox.isChecked(),
+            'error_log': self.error_log_checkbox.isChecked(),
             'use_colors': self.use_colors_checkbox.isChecked(),
             'free_quota': self.free_quota_checkbox.isChecked()
         }
@@ -258,6 +269,7 @@ class TranslatorGUI(QWidget):
             self.model_name_combo.setCurrentText(settings.get('model_name', 'gemini-2.0-flash'))
             self.start_line_input.setText(settings.get('start_line', '1'))
             self.skip_upgrade_checkbox.setChecked(settings.get('skip_upgrade', False))
+            self.error_log_checkbox.setChecked(settings.get('error_log', False))
             self.use_colors_checkbox.setChecked(settings.get('use_colors', True))
             self.free_quota_checkbox.setChecked(settings.get('free_quota', True))
     
@@ -303,6 +315,8 @@ class TranslatorGUI(QWidget):
         gst.start_line = int(self.start_line_input.text())
         
         gst.skip_upgrade = self.skip_upgrade_checkbox.isChecked()
+        
+        gst.error_log = self.error_log_checkbox.isChecked()
         
         gst.use_colors = self.use_colors_checkbox.isChecked()
         
