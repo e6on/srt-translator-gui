@@ -31,7 +31,7 @@ class TranslatorGUI(QWidget):
         main_layout.setContentsMargins(10, 10, 10, 5)
 
         # Add header
-        header_label = QLabel("Gemini SRT Translator v1.8.0 GUI")
+        header_label = QLabel("Gemini SRT Translator v1.8.8 GUI")
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(header_label)
 
@@ -58,7 +58,7 @@ class TranslatorGUI(QWidget):
         self.description_label = QLabel('Context:')
         self.description_input = QTextEdit()
         self.description_input.setPlaceholderText("Enter additional context about the subtitle content (optional)...")
-        self.description_input.setMaximumHeight(80)
+        self.description_input.setMaximumHeight(110)
         translation_layout.addWidget(self.description_label)
         translation_layout.addWidget(self.description_input)
 
@@ -174,6 +174,16 @@ class TranslatorGUI(QWidget):
         checkbox2_layout.addWidget(self.error_log_checkbox)
         
         advanced_layout.addLayout(checkbox2_layout)
+        
+        checkbox3_layout = QHBoxLayout()
+        checkbox3_layout.setSpacing(5)
+        checkbox3_layout.setContentsMargins(0, 5, 0, 5)
+
+        self.disable_streaming_checkbox = QCheckBox('Disable Streaming')
+        self.disable_streaming_checkbox.setChecked(False)
+        checkbox3_layout.addWidget(self.disable_streaming_checkbox)
+        
+        advanced_layout.addLayout(checkbox3_layout)
 
         advanced_group.setLayout(advanced_layout)
         right_layout.addWidget(advanced_group)
@@ -250,6 +260,7 @@ class TranslatorGUI(QWidget):
             'model_name': self.model_name_combo.currentText(),
             'start_line': self.start_line_input.text(),
             'skip_upgrade': self.skip_upgrade_checkbox.isChecked(),
+            'disable_streaming': self.disable_streaming_checkbox.isChecked(),
             'error_log': self.error_log_checkbox.isChecked(),
             'use_colors': self.use_colors_checkbox.isChecked(),
             'free_quota': self.free_quota_checkbox.isChecked()
@@ -269,6 +280,7 @@ class TranslatorGUI(QWidget):
             self.model_name_combo.setCurrentText(settings.get('model_name', 'gemini-2.0-flash'))
             self.start_line_input.setText(settings.get('start_line', '1'))
             self.skip_upgrade_checkbox.setChecked(settings.get('skip_upgrade', False))
+            self.disable_streaming_checkbox.setChecked(settings.get('disable_streaming', False))
             self.error_log_checkbox.setChecked(settings.get('error_log', False))
             self.use_colors_checkbox.setChecked(settings.get('use_colors', True))
             self.free_quota_checkbox.setChecked(settings.get('free_quota', True))
@@ -315,6 +327,8 @@ class TranslatorGUI(QWidget):
         gst.start_line = int(self.start_line_input.text())
         
         gst.skip_upgrade = self.skip_upgrade_checkbox.isChecked()
+        
+        gst.disable_streaming = self.disable_streaming_checkbox.isChecked()
         
         gst.error_log = self.error_log_checkbox.isChecked()
         
