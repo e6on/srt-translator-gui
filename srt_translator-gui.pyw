@@ -185,7 +185,7 @@ class TranslatorGUI(QWidget):
         self.batch_size_label = QLabel('Lines per Batch:')
         self.batch_size_input = QLineEdit()
         self.batch_size_input.setFixedWidth(70)
-        self.batch_size_input.setText('30')
+        self.batch_size_input.setText('300')
         lines_input_layout.addWidget(self.batch_size_label)
         lines_input_layout.addWidget(self.batch_size_input)
 
@@ -336,7 +336,7 @@ class TranslatorGUI(QWidget):
             self.api_key_input.setText(settings.get('api_key', ''))
             self.api_key2_input.setText(settings.get('api_key2', ''))
             self.description_input.setPlainText(settings.get('description', ''))
-            self.batch_size_input.setText(settings.get('batch_size', '30'))
+            self.batch_size_input.setText(settings.get('batch_size', '300'))
             self.target_language_combo.setCurrentText(settings.get('target_language', 'Estonia'))
             self.model_name_combo.setCurrentText(settings.get('model_name', 'gemini-2.0-flash'))
             self.start_line_input.setText(settings.get('start_line', '1'))
