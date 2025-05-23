@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import io
+import importlib
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QFrame
 from PyQt6.QtCore import Qt
 
@@ -31,7 +32,7 @@ class TranslatorGUI(QWidget):
         main_layout.setContentsMargins(10, 10, 10, 5)
 
         # Add header
-        header_label = QLabel("Gemini SRT Translator v1.8.8 GUI")
+        header_label = QLabel("Gemini SRT Translator v2.0.0 GUI")
         header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(header_label)
 
@@ -58,7 +59,7 @@ class TranslatorGUI(QWidget):
         self.description_label = QLabel('Context:')
         self.description_input = QTextEdit()
         self.description_input.setPlaceholderText("Enter additional context about the subtitle content (optional)...")
-        self.description_input.setMaximumHeight(110)
+        self.description_input.setMaximumHeight(90)
         translation_layout.addWidget(self.description_label)
         translation_layout.addWidget(self.description_input)
 
@@ -74,13 +75,63 @@ class TranslatorGUI(QWidget):
         self.model_name_label = QLabel('Model:')
         model_layout = QHBoxLayout()
         self.model_name_combo = QComboBox()
-        self.model_name_combo.setFixedWidth(180)
+        self.model_name_combo.setFixedWidth(280)
         self.populate_models_button = QPushButton('List Models')
         self.populate_models_button.clicked.connect(self.populateModels)
         model_layout.addWidget(self.model_name_label)
         model_layout.addWidget(self.model_name_combo)
         model_layout.addWidget(self.populate_models_button)
         translation_layout.addLayout(model_layout)
+
+        model_tuning1_layout = QHBoxLayout()
+        model_tuning1_layout.setSpacing(5)
+        model_tuning1_layout.setContentsMargins(0, 5, 0, 5)
+
+        self.top_p_label = QLabel('Nucleus sampling (0.0-1.0):')
+        self.top_p_input = QLineEdit()
+        self.top_p_input.setFixedWidth(60)
+        # self.top_p_input.setText('1')
+        model_tuning1_layout.addWidget(self.top_p_label)
+        model_tuning1_layout.addWidget(self.top_p_input)
+        
+        self.temperature_label = QLabel('Randomness (0.0-2.0):')
+        self.temperature_input = QLineEdit()
+        self.temperature_input.setFixedWidth(60)
+        # self.temperature_input.setText('30')
+        model_tuning1_layout.addWidget(self.temperature_label)
+        model_tuning1_layout.addWidget(self.temperature_input)
+        
+        translation_layout.addLayout(model_tuning1_layout)
+
+        model_tuning2_layout = QHBoxLayout()
+        model_tuning2_layout.setSpacing(5)
+        model_tuning2_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.thinking_budget_label = QLabel('Thinking budget (0-24576):')
+        self.thinking_budget_input = QLineEdit()
+        self.thinking_budget_input.setFixedWidth(60)
+        self.thinking_budget_input.setText('2048')
+        model_tuning2_layout.addWidget(self.thinking_budget_label)
+        model_tuning2_layout.addWidget(self.thinking_budget_input)
+
+        self.top_k_label = QLabel('Top-k sampling (≥0):')
+        self.top_k_input = QLineEdit()
+        self.top_k_input.setFixedWidth(60)
+        # self.top_k_input.setText('1')
+        model_tuning2_layout.addWidget(self.top_k_label)
+        model_tuning2_layout.addWidget(self.top_k_input)
+        
+        translation_layout.addLayout(model_tuning2_layout)
+
+        tunung_checkbox1_layout = QHBoxLayout()
+        tunung_checkbox1_layout.setSpacing(5)
+        tunung_checkbox1_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.thinking_checkbox = QCheckBox('Enable thinking')
+        self.thinking_checkbox.setChecked(True)
+        tunung_checkbox1_layout.addWidget(self.thinking_checkbox)
+        
+        translation_layout.addLayout(tunung_checkbox1_layout)
 
         translation_group.setLayout(translation_layout)
         left_layout.addWidget(translation_group)
@@ -127,33 +178,33 @@ class TranslatorGUI(QWidget):
         advanced_layout.setSpacing(5)
         advanced_layout.setContentsMargins(10, 5, 10, 5)
         
-        input_layout = QHBoxLayout()
-        input_layout.setSpacing(5)
-        input_layout.setContentsMargins(0, 5, 0, 5)
+        lines_input_layout = QHBoxLayout()
+        lines_input_layout.setSpacing(5)
+        lines_input_layout.setContentsMargins(0, 5, 0, 5)
         
         self.batch_size_label = QLabel('Lines per Batch:')
         self.batch_size_input = QLineEdit()
         self.batch_size_input.setFixedWidth(70)
         self.batch_size_input.setText('30')
-        input_layout.addWidget(self.batch_size_label)
-        input_layout.addWidget(self.batch_size_input)
+        lines_input_layout.addWidget(self.batch_size_label)
+        lines_input_layout.addWidget(self.batch_size_input)
 
         self.start_line_label = QLabel('Start Line:')
         self.start_line_input = QLineEdit()
         self.start_line_input.setFixedWidth(70)
         self.start_line_input.setText('1')
-        input_layout.addWidget(self.start_line_label)
-        input_layout.addWidget(self.start_line_input)
+        lines_input_layout.addWidget(self.start_line_label)
+        lines_input_layout.addWidget(self.start_line_input)
         
-        advanced_layout.addLayout(input_layout)
+        advanced_layout.addLayout(lines_input_layout)
         
         checkbox1_layout = QHBoxLayout()
         checkbox1_layout.setSpacing(5)
         checkbox1_layout.setContentsMargins(0, 5, 0, 5)
         
-        self.free_quota_checkbox = QCheckBox('Free Quota')
-        self.free_quota_checkbox.setChecked(True)
-        checkbox1_layout.addWidget(self.free_quota_checkbox)
+        self.skip_upgrade_checkbox = QCheckBox('Skip Upgrade')
+        self.skip_upgrade_checkbox.setChecked(False)
+        checkbox1_layout.addWidget(self.skip_upgrade_checkbox)
 
         self.use_colors_checkbox = QCheckBox('Use Colors')
         self.use_colors_checkbox.setChecked(True)
@@ -165,13 +216,13 @@ class TranslatorGUI(QWidget):
         checkbox2_layout.setSpacing(5)
         checkbox2_layout.setContentsMargins(0, 5, 0, 5)
 
-        self.skip_upgrade_checkbox = QCheckBox('Skip Upgrade')
-        self.skip_upgrade_checkbox.setChecked(False)
-        checkbox2_layout.addWidget(self.skip_upgrade_checkbox)
+        self.free_quota_checkbox = QCheckBox('Free Quota')
+        self.free_quota_checkbox.setChecked(True)
+        checkbox2_layout.addWidget(self.free_quota_checkbox)
         
-        self.error_log_checkbox = QCheckBox('Error log')
-        self.error_log_checkbox.setChecked(False)
-        checkbox2_layout.addWidget(self.error_log_checkbox)
+        self.progress_log_checkbox = QCheckBox('Progress log')
+        self.progress_log_checkbox.setChecked(False)
+        checkbox2_layout.addWidget(self.progress_log_checkbox)
         
         advanced_layout.addLayout(checkbox2_layout)
         
@@ -179,9 +230,13 @@ class TranslatorGUI(QWidget):
         checkbox3_layout.setSpacing(5)
         checkbox3_layout.setContentsMargins(0, 5, 0, 5)
 
-        self.disable_streaming_checkbox = QCheckBox('Disable Streaming')
-        self.disable_streaming_checkbox.setChecked(False)
-        checkbox3_layout.addWidget(self.disable_streaming_checkbox)
+        self.streaming_checkbox = QCheckBox('Enable streaming')
+        self.streaming_checkbox.setChecked(True)
+        checkbox3_layout.addWidget(self.streaming_checkbox)
+
+        self.thoughts_log_checkbox = QCheckBox('Thoughts log')
+        self.thoughts_log_checkbox.setChecked(False)
+        checkbox3_layout.addWidget(self.thoughts_log_checkbox)
         
         advanced_layout.addLayout(checkbox3_layout)
 
@@ -215,7 +270,7 @@ class TranslatorGUI(QWidget):
         main_layout.addWidget(line_separator)
 
         # Add footer
-        footer_label = QLabel("Made with ❤️ by e6on")
+        footer_label = QLabel("Made by e6on")
         footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(footer_label)
 
@@ -259,9 +314,15 @@ class TranslatorGUI(QWidget):
             'target_language': self.target_language_combo.currentText(),
             'model_name': self.model_name_combo.currentText(),
             'start_line': self.start_line_input.text(),
+            'temperature': self.temperature_input.text(),
+            'top_p': self.top_p_input.text(),
+            'thinking_budget': self.thinking_budget_input.text(),
+            'thinking': self.thinking_checkbox.isChecked(),
+            'top_k': self.top_k_input.text(),
             'skip_upgrade': self.skip_upgrade_checkbox.isChecked(),
-            'disable_streaming': self.disable_streaming_checkbox.isChecked(),
-            'error_log': self.error_log_checkbox.isChecked(),
+            'streaming': self.streaming_checkbox.isChecked(),
+            'progress_log': self.progress_log_checkbox.isChecked(),
+            'thoughts_log': self.thoughts_log_checkbox.isChecked(),
             'use_colors': self.use_colors_checkbox.isChecked(),
             'free_quota': self.free_quota_checkbox.isChecked()
         }
@@ -279,9 +340,15 @@ class TranslatorGUI(QWidget):
             self.target_language_combo.setCurrentText(settings.get('target_language', 'Estonia'))
             self.model_name_combo.setCurrentText(settings.get('model_name', 'gemini-2.0-flash'))
             self.start_line_input.setText(settings.get('start_line', '1'))
+            self.temperature_input.setText(settings.get('temperature', ''))
+            self.top_p_input.setText(settings.get('top_p', ''))
+            self.thinking_budget_input.setText(settings.get('thinking_budget', '2048'))
+            self.thinking_checkbox.setChecked(settings.get('thinking', True))
+            self.top_k_input.setText(settings.get('top_k', ''))
             self.skip_upgrade_checkbox.setChecked(settings.get('skip_upgrade', False))
-            self.disable_streaming_checkbox.setChecked(settings.get('disable_streaming', False))
-            self.error_log_checkbox.setChecked(settings.get('error_log', False))
+            self.streaming_checkbox.setChecked(settings.get('streaming', True))
+            self.progress_log_checkbox.setChecked(settings.get('progress_log', False))
+            self.thoughts_log_checkbox.setChecked(settings.get('thoughts_log', False))
             self.use_colors_checkbox.setChecked(settings.get('use_colors', True))
             self.free_quota_checkbox.setChecked(settings.get('free_quota', True))
     
@@ -306,36 +373,76 @@ class TranslatorGUI(QWidget):
             return
 
         import gemini_srt_translator as gst
+
+        importlib.reload(gst) # Reload to ensure fresh defaults for optional params
         
         gst.gemini_api_key = self.api_key_input.text()
         gst.gemini_api_key2 = self.api_key2_input.text()
-        
         gst.target_language = self.target_language_combo.currentText()
-        
         input_file = self.input_file_display.text()
-        
         gst.input_file = input_file
-        
         gst.output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
-        
         gst.description = self.description_input.toPlainText()
-        
         gst.model_name = self.model_name_combo.currentText()
+
+        # Mandatory numeric fields (already checked for non-empty)
+        try:
+            gst.batch_size = int(self.batch_size_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", f"Batch Size must be a valid integer. You entered: '{self.batch_size_input.text()}'")
+            return
+        try:
+            gst.start_line = int(self.start_line_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "Invalid Input", f"Start Line must be a valid integer. You entered: '{self.start_line_input.text()}'")
+            return
         
-        gst.batch_size = int(self.batch_size_input.text())
+        # Optional numeric parameters: only set if input is not empty
+        temperature_text = self.temperature_input.text()
+        if temperature_text:
+            try:
+                gst.temperature = float(temperature_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Temperature must be a valid number (e.g., 0.7). You entered: '{temperature_text}'")
+                return
         
-        gst.start_line = int(self.start_line_input.text())
-        
+        top_p_text = self.top_p_input.text()
+        if top_p_text:
+            try:
+                gst.top_p = float(top_p_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Nucleus sampling (Top P) must be a valid number (e.g., 0.9). You entered: '{top_p_text}'")
+                return
+
+        thinking_budget_text = self.thinking_budget_input.text()
+        if thinking_budget_text:
+            try:
+                gst.thinking_budget = int(thinking_budget_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Thinking budget must be a valid integer. You entered: '{thinking_budget_text}'")
+                return
+
+        top_k_text = self.top_k_input.text()
+        if top_k_text:
+            try:
+                gst.top_k = int(top_k_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Top-K sampling must be a valid integer (e.g., 40). You entered: '{top_k_text}'")
+                return
+
+        # gst.batch_size = int(self.batch_size_input.text())
+        # gst.start_line = int(self.start_line_input.text())
+        # gst.temperature = float(self.temperature_input.text())
+        # gst.top_p = float(self.top_p_input.text())
+        # gst.thinking_budget = int(self.thinking_budget_input.text())
+        gst.thinking = self.thinking_checkbox.isChecked()
+        # gst.top_k = int(self.top_k_input.text())
         gst.skip_upgrade = self.skip_upgrade_checkbox.isChecked()
-        
-        gst.disable_streaming = self.disable_streaming_checkbox.isChecked()
-        
-        gst.error_log = self.error_log_checkbox.isChecked()
-        
+        gst.streaming = self.streaming_checkbox.isChecked()
+        gst.progress_log = self.progress_log_checkbox.isChecked()
+        gst.thoughts_log = self.thoughts_log_checkbox.isChecked()
         gst.use_colors = self.use_colors_checkbox.isChecked()
-        
         gst.free_quota = self.free_quota_checkbox.isChecked()
-        
         gst.translate()
 
         QMessageBox.information(self, "Success", "Translation completed successfully!")
