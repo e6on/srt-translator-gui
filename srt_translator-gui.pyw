@@ -28,14 +28,14 @@ KEY_PROGRESS_LOG = 'progress_log'
 KEY_THOUGHTS_LOG = 'thoughts_log'
 KEY_USE_COLORS = 'use_colors'
 KEY_FREE_QUOTA = 'free_quota'
-KEY_INPUT_FILE = 'input_file' # Added to remember last input file
+KEY_INPUT_FILE = 'input_file'
 
 DEFAULT_SETTINGS = {
     KEY_API_KEY: '',
     KEY_API_KEY2: '',
     KEY_DESCRIPTION: '',
     KEY_BATCH_SIZE: '300',
-    KEY_TARGET_LANGUAGE: 'Estonian', # Ensure this matches an item in the language list
+    KEY_TARGET_LANGUAGE: 'Estonian',
     KEY_MODEL_NAME: 'gemini-2.5-flash-preview-05-20',
     KEY_START_LINE: '1',
     KEY_TEMPERATURE: '',
@@ -546,7 +546,6 @@ class TranslatorGUI(QWidget):
         gst.use_colors = self.use_colors_checkbox.isChecked()
         gst.free_quota = self.free_quota_checkbox.isChecked()
         
-        # The gst.translate() call was duplicated, removing one.
         try:
             gst.translate()
             QMessageBox.information(self, "Success", "Translation completed successfully!")
