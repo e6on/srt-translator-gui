@@ -1,7 +1,7 @@
 # Gemini SRT Translator GUI
 This is a GUI for Gemini SRT Translator.
 
-<img width="854" alt="image" src="https://github.com/user-attachments/assets/ca5a5229-a708-4589-9805-df4e8a9ccedc" />
+<img width="856" alt="image" src="https://github.com/user-attachments/assets/b434791b-0624-4a4b-b139-69d7d916d03d" />
 
 Gemini SRT Translator is a tool designed to translate subtitle files using Google Generative AI. It leverages the power of the Gemini API to provide accurate and efficient translations for your subtitle files.
 
