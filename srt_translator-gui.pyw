@@ -4,7 +4,7 @@ import json
 import io
 import importlib
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QFrame
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 
 # --- Constants ---
 SETTINGS_FILE = 'settings.json'
@@ -29,6 +29,12 @@ KEY_THOUGHTS_LOG = 'thoughts_log'
 KEY_USE_COLORS = 'use_colors'
 KEY_FREE_QUOTA = 'free_quota'
 KEY_INPUT_FILE = 'input_file'
+KEY_VIDEO_FILE = 'video_file'
+KEY_AUDIO_FILE = 'audio_file'
+KEY_EXTRACT_AUDIO = 'extract_audio'
+KEY_QUIET_MODE = 'quiet_mode'
+KEY_RESUME = 'resume'
+KEY_CONTEXT_FILES_VISIBLE = 'context_files_visible'
 
 DEFAULT_SETTINGS = {
     KEY_API_KEY: '',
@@ -38,22 +44,28 @@ DEFAULT_SETTINGS = {
     KEY_TARGET_LANGUAGE: 'Estonian',
     KEY_MODEL_NAME: 'gemini-2.5-flash-preview-05-20',
     KEY_START_LINE: '1',
-    KEY_TEMPERATURE: '',
-    KEY_TOP_P: '',
-    KEY_THINKING_BUDGET: '2048',
+    KEY_TEMPERATURE: '0.7',
+    KEY_TOP_P: '0.95',
+    KEY_THINKING_BUDGET: '4096',
     KEY_THINKING: True,
-    KEY_TOP_K: '',
+    KEY_TOP_K: '20',
     KEY_SKIP_UPGRADE: False,
     KEY_STREAMING: True,
     KEY_PROGRESS_LOG: False,
     KEY_THOUGHTS_LOG: False,
     KEY_USE_COLORS: True,
     KEY_FREE_QUOTA: True,
-    KEY_INPUT_FILE: ''
+    KEY_INPUT_FILE: '',
+    KEY_VIDEO_FILE: '',
+    KEY_AUDIO_FILE: '',
+    KEY_EXTRACT_AUDIO: False,
+    KEY_QUIET_MODE: False,
+    KEY_RESUME: True,
+    KEY_CONTEXT_FILES_VISIBLE: False,
 }
 
 # UI Literals
-APP_TITLE = "Gemini SRT Translator v2.0.0 GUI"
+APP_TITLE = "Gemini SRT Translator v2.1.0 GUI"
 FOOTER_TEXT = "Made by e6on & Gemini AI, 2025"
 MODEL_NAME_COMBO_WIDTH = 280
 NUMERIC_INPUT_FIXED_WIDTH = 60
@@ -191,6 +203,8 @@ class TranslatorGUI(QWidget):
 
     def _create_input_file_controls_layout(self):
         input_file_main_layout = QVBoxLayout()
+        input_file_main_layout.setSpacing(5)
+        input_file_main_layout.setContentsMargins(0, 0, 0, 0)
         self.input_file_label = QLabel('Input File:')
         input_file_layout = QHBoxLayout()
         self.input_file_display = QLineEdit()
@@ -202,6 +216,79 @@ class TranslatorGUI(QWidget):
         input_file_main_layout.addWidget(self.input_file_label)
         input_file_main_layout.addLayout(input_file_layout)
         return input_file_main_layout
+
+    def _create_contextual_input_files_group(self):
+        self.contextual_input_files_group = QGroupBox("Contextual Input Files (Optional)")
+        self.contextual_input_files_group.setCheckable(True) # Make it checkable/collapsible
+
+        # Make the checkbox indicator bigger using style sheet
+        self.contextual_input_files_group.setStyleSheet("QGroupBox::indicator { width: 20px; height: 20px; }")
+        # Create a container widget for all the actual content elements
+        self.context_content_area_widget = QWidget()
+
+        # Layout for the container widget (self.context_content_area_widget)
+        content_elements_layout = QVBoxLayout(self.context_content_area_widget)
+        content_elements_layout.setSpacing(5)
+        # These margins are for the elements within the content_content_area_widget.
+        content_elements_layout.setContentsMargins(10, 5, 10, 5) # Original content margins
+
+        extract_audio_layout = QHBoxLayout()
+        extract_audio_layout.addStretch(1) # Add stretch to push checkbox to the right
+        self.extract_audio_checkbox = QCheckBox('Extract audio from video')
+        extract_audio_layout.addWidget(self.extract_audio_checkbox)
+        content_elements_layout.addLayout(extract_audio_layout)
+
+        # Video File
+        self.video_file_label = QLabel('Video File (for context):')
+        video_file_layout = QHBoxLayout()
+        video_file_layout.setSpacing(5)
+        video_file_layout.setContentsMargins(0, 5, 0, 5)
+        self.video_file_display = QLineEdit()
+        self.video_file_display.setReadOnly(True)
+        self.browse_video_button = QPushButton('Browse Video')
+        self.browse_video_button.clicked.connect(self.browseVideoFile)
+        video_file_layout.addWidget(self.video_file_display)
+        video_file_layout.addWidget(self.browse_video_button)
+        content_elements_layout.addWidget(self.video_file_label)
+        content_elements_layout.addLayout(video_file_layout)
+
+        # Audio File
+        self.audio_file_label = QLabel('Audio File (for context):')
+        audio_file_layout = QHBoxLayout()
+        audio_file_layout.setSpacing(5)
+        audio_file_layout.setContentsMargins(0, 5, 0, 5)
+        self.audio_file_display = QLineEdit()
+        self.audio_file_display.setReadOnly(True)
+        self.browse_audio_button = QPushButton('Browse Audio')
+        self.browse_audio_button.clicked.connect(self.browseAudioFile)
+        audio_file_layout.addWidget(self.audio_file_display)
+        audio_file_layout.addWidget(self.browse_audio_button)
+        content_elements_layout.addWidget(self.audio_file_label)
+        content_elements_layout.addLayout(audio_file_layout)
+
+        # Layout for the QGroupBox itself, to hold the context_content_area_widget
+        qgroupbox_layout = QVBoxLayout()
+        qgroupbox_layout.setContentsMargins(0,0,0,0) # Let QGroupBox style provide outer padding
+        qgroupbox_layout.addWidget(self.context_content_area_widget)
+        self.contextual_input_files_group.setLayout(qgroupbox_layout)
+
+        self.contextual_input_files_group.toggled.connect(self._toggle_contextual_group_and_resize)
+        return self.contextual_input_files_group
+
+    def _toggle_contextual_group_and_resize(self, checked):
+        """Handles visibility of contextual group content and resizes the main window."""
+        self.context_content_area_widget.setVisible(checked)
+
+        def do_resize_logic():
+            # Force the main layout to recalculate its size hints
+            self.layout().activate()
+
+            if not checked:  # Collapsed
+                self.resize(self.minimumSizeHint())
+            else:  # Expanded
+                self.adjustSize() # Resize to preferred sizeHint
+
+        QTimer.singleShot(0, do_resize_logic)
 
     def _create_api_key_group(self):
         api_key_group = QGroupBox("API Key Management")
@@ -282,6 +369,16 @@ class TranslatorGUI(QWidget):
         
         advanced_layout.addLayout(checkbox3_layout)
 
+        checkbox4_layout = QHBoxLayout()
+        checkbox4_layout.setSpacing(5)
+        checkbox4_layout.setContentsMargins(0, 5, 0, 5)
+
+        self.quiet_mode_checkbox = QCheckBox('Quiet Mode')
+        checkbox4_layout.addWidget(self.quiet_mode_checkbox)
+
+        self.resume_checkbox = QCheckBox('Auto Resume')
+        checkbox4_layout.addWidget(self.resume_checkbox)
+        advanced_layout.addLayout(checkbox4_layout)
         advanced_group.setLayout(advanced_layout)
         return advanced_group
 
@@ -293,6 +390,8 @@ class TranslatorGUI(QWidget):
         self.run_button.clicked.connect(self.runTranslation)
 
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)
+        button_layout.setContentsMargins(10, 0, 10, 0)
         button_layout.addWidget(self.save_button)
         button_layout.addWidget(self.run_button)
         return button_layout
@@ -318,19 +417,33 @@ class TranslatorGUI(QWidget):
 
         # Left column
         left_layout = QVBoxLayout()
-        left_layout.setSpacing(5)
+        left_layout.setSpacing(0) # Set base spacing to 0 for manual control
         left_layout.setContentsMargins(5, 10, 5, 10)
+
         left_layout.addWidget(self._create_translation_settings_group())
+        left_layout.addSpacing(10) # Gap after Translation Settings
+
+        left_layout.addWidget(self._create_contextual_input_files_group())
+        left_layout.addSpacing(10) # Gap after Contextual Input Files
+
         left_layout.addLayout(self._create_input_file_controls_layout())
+        # No specific gap needed before stretch if layout ends here for visible items
+
         left_layout.addStretch(1) # Add stretch to push content up
 
         # Right column
         right_layout = QVBoxLayout()
-        right_layout.setSpacing(5)
+        right_layout.setSpacing(0) # Set base spacing to 0 for manual control
         right_layout.setContentsMargins(5, 10, 5, 10)
+
         right_layout.addWidget(self._create_api_key_group())
+        right_layout.addSpacing(10) # Gap after API Key Management
+
         right_layout.addWidget(self._create_advanced_settings_group())
+        # No specific gap needed before stretch if layout ends here for visible items
+
         right_layout.addStretch(1) # Add stretch to push content up
+        right_layout.addSpacing(10) # Gap before Action Buttons
         right_layout.addLayout(self._create_action_buttons_layout())
 
         # Add left and right layouts to columns layout
@@ -348,7 +461,17 @@ class TranslatorGUI(QWidget):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Input File", "", "SRT Files (*.srt);;All Files (*)")
         if file_name:
             self.input_file_display.setText(file_name)
-    
+
+    def browseVideoFile(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Video File", "", "Video Files (*.mp4 *.mkv *.avi *.mov);;All Files (*)")
+        if file_name:
+            self.video_file_display.setText(file_name)
+
+    def browseAudioFile(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select Audio File", "", "Audio Files (*.mp3 *.wav *.aac *.ogg);;All Files (*)")
+        if file_name:
+            self.audio_file_display.setText(file_name)
+
     def populateModels(self):
         if not self.api_key_input.text():
             QMessageBox.warning(self, "API Key Missing", "Please enter the Gemini API Key to list models.")
@@ -408,7 +531,13 @@ class TranslatorGUI(QWidget):
             KEY_THOUGHTS_LOG: self.thoughts_log_checkbox.isChecked(),
             KEY_USE_COLORS: self.use_colors_checkbox.isChecked(),
             KEY_FREE_QUOTA: self.free_quota_checkbox.isChecked(),
-            KEY_INPUT_FILE: self.input_file_display.text()
+            KEY_INPUT_FILE: self.input_file_display.text(),
+            KEY_VIDEO_FILE: self.video_file_display.text(),
+            KEY_AUDIO_FILE: self.audio_file_display.text(),
+            KEY_EXTRACT_AUDIO: self.extract_audio_checkbox.isChecked(),
+            KEY_QUIET_MODE: self.quiet_mode_checkbox.isChecked(),
+            KEY_RESUME: self.resume_checkbox.isChecked(),
+            KEY_CONTEXT_FILES_VISIBLE: self.contextual_input_files_group.isChecked(),
         }
         save_settings(current_settings)
         self.settings = current_settings # Update in-memory settings
@@ -444,6 +573,15 @@ class TranslatorGUI(QWidget):
         self.use_colors_checkbox.setChecked(self.settings[KEY_USE_COLORS])
         self.free_quota_checkbox.setChecked(self.settings[KEY_FREE_QUOTA])
         self.input_file_display.setText(self.settings[KEY_INPUT_FILE])
+        self.video_file_display.setText(self.settings[KEY_VIDEO_FILE])
+        self.audio_file_display.setText(self.settings[KEY_AUDIO_FILE])
+        self.extract_audio_checkbox.setChecked(self.settings[KEY_EXTRACT_AUDIO])
+        self.quiet_mode_checkbox.setChecked(self.settings[KEY_QUIET_MODE])
+        self.resume_checkbox.setChecked(self.settings[KEY_RESUME])
+        
+        self.contextual_input_files_group.setChecked(self.settings[KEY_CONTEXT_FILES_VISIBLE])
+        # Call the toggle method to set visibility and adjust size
+        self._toggle_contextual_group_and_resize(self.settings[KEY_CONTEXT_FILES_VISIBLE])
 
     def runTranslation(self):
         # --- Validation of required fields ---
@@ -545,6 +683,12 @@ class TranslatorGUI(QWidget):
         gst.thoughts_log = self.thoughts_log_checkbox.isChecked()
         gst.use_colors = self.use_colors_checkbox.isChecked()
         gst.free_quota = self.free_quota_checkbox.isChecked()
+
+        gst.video_file = self.video_file_display.text()
+        gst.audio_file = self.audio_file_display.text()
+        gst.extract_audio = self.extract_audio_checkbox.isChecked()
+        gst.quiet_mode = self.quiet_mode_checkbox.isChecked()
+        gst.resume = self.resume_checkbox.isChecked()
         
         try:
             gst.translate()
