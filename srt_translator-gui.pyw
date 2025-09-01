@@ -3,7 +3,7 @@ import os
 import json
 import io
 import importlib
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QFrame
+from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QFrame, QListWidget, QTabWidget
 from PyQt6.QtCore import Qt, QTimer
 
 # --- Constants ---
@@ -28,13 +28,16 @@ KEY_PROGRESS_LOG = 'progress_log'
 KEY_THOUGHTS_LOG = 'thoughts_log'
 KEY_USE_COLORS = 'use_colors'
 KEY_FREE_QUOTA = 'free_quota'
-KEY_INPUT_FILE = 'input_file'
+KEY_INPUT_FILES = 'input_files'
 KEY_VIDEO_FILE = 'video_file'
 KEY_AUDIO_FILE = 'audio_file'
 KEY_EXTRACT_AUDIO = 'extract_audio'
 KEY_QUIET_MODE = 'quiet_mode'
 KEY_RESUME = 'resume'
 KEY_CONTEXT_FILES_VISIBLE = 'context_files_visible'
+
+# Deprecated key for migration
+KEY_INPUT_FILE = 'input_file'
 
 DEFAULT_SETTINGS = {
     KEY_API_KEY: '',
@@ -55,7 +58,7 @@ DEFAULT_SETTINGS = {
     KEY_THOUGHTS_LOG: False,
     KEY_USE_COLORS: True,
     KEY_FREE_QUOTA: True,
-    KEY_INPUT_FILE: '',
+    KEY_INPUT_FILES: [],
     KEY_VIDEO_FILE: '',
     KEY_AUDIO_FILE: '',
     KEY_EXTRACT_AUDIO: False,
@@ -65,10 +68,10 @@ DEFAULT_SETTINGS = {
 }
 
 # UI Literals
-APP_TITLE = "Gemini SRT Translator v2.1.0 GUI"
+APP_TITLE = "Gemini SRT Translator v2.1.4 GUI"
 FOOTER_TEXT = "Made by e6on & Gemini AI, 2025"
 MODEL_NAME_COMBO_WIDTH = 280
-NUMERIC_INPUT_FIXED_WIDTH = 60
+NUMERIC_INPUT_FIXED_WIDTH = 70
 BATCH_LINE_INPUT_FIXED_WIDTH = 70
 DESCRIPTION_MAX_HEIGHT = 90
 SUPPORTED_LANGUAGES = [
@@ -86,6 +89,19 @@ def load_settings():
         with open(SETTINGS_FILE, 'r') as f:
             try:
                 loaded_settings = json.load(f)
+
+                # --- Migration from old settings format ---
+                if KEY_INPUT_FILE in loaded_settings and loaded_settings[KEY_INPUT_FILE]:
+                    if KEY_INPUT_FILES not in loaded_settings:
+                        loaded_settings[KEY_INPUT_FILES] = []
+                    # Add the old file to the list if it's not already there
+                    if loaded_settings[KEY_INPUT_FILE] not in loaded_settings[KEY_INPUT_FILES]:
+                        loaded_settings[KEY_INPUT_FILES].insert(0, loaded_settings[KEY_INPUT_FILE])
+                # Now remove the old key so it doesn't get carried over
+                if KEY_INPUT_FILE in loaded_settings:
+                    del loaded_settings[KEY_INPUT_FILE]
+                # --- End Migration ---
+
                 # Merge with defaults to ensure all keys are present
                 settings = DEFAULT_SETTINGS.copy()
                 settings.update(loaded_settings)
@@ -102,25 +118,16 @@ class TranslatorGUI(QWidget):
         self.initUI()
         self.populate_ui_from_settings() # Then populate UI
 
-    def _create_header(self):
-        header_label = QLabel(APP_TITLE)
-        header_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        font = header_label.font()
-        font.setPointSize(14)
-        font.setBold(True)
-        header_label.setFont(font)
-        return header_label
-
     def _create_line_separator(self):
         line_separator = QFrame()
         line_separator.setFrameShape(QFrame.Shape.HLine)
         line_separator.setFrameShadow(QFrame.Shadow.Sunken)
         return line_separator
 
-    def _create_translation_settings_group(self):
+    def _create_model_context_settings_group(self):
         # Create main layout
-        translation_group = QGroupBox("Translation Settings")
-        translation_layout = QVBoxLayout()
+        settings_group = QGroupBox("Model & Context Settings")
+        translation_layout = QVBoxLayout(settings_group)
         translation_layout.setSpacing(5)
         translation_layout.setContentsMargins(10, 5, 10, 5)
 
@@ -158,35 +165,43 @@ class TranslatorGUI(QWidget):
         model_tuning1_layout.setSpacing(5)
         model_tuning1_layout.setContentsMargins(0, 5, 0, 5)
 
-        self.top_p_label = QLabel('Nucleus sampling (0.0-1.0):')
+        self.top_p_label = QLabel('Top P:')
         self.top_p_input = QLineEdit()
+        self.top_p_input.setPlaceholderText("0.0-1.0")
         self.top_p_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
+        # model_tuning1_layout.addStretch(1)
         model_tuning1_layout.addWidget(self.top_p_label)
         model_tuning1_layout.addWidget(self.top_p_input)
 
-        self.temperature_label = QLabel('Randomness (0.0-2.0):')
+        self.temperature_label = QLabel('Temperature:')
         self.temperature_input = QLineEdit()
+        self.temperature_input.setPlaceholderText("0.0-2.0")
         self.temperature_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
+        model_tuning1_layout.addStretch(1)
         model_tuning1_layout.addWidget(self.temperature_label)
         model_tuning1_layout.addWidget(self.temperature_input)
-        
+
         translation_layout.addLayout(model_tuning1_layout)
 
         model_tuning2_layout = QHBoxLayout()
         model_tuning2_layout.setSpacing(5)
         model_tuning2_layout.setContentsMargins(0, 5, 0, 5)
-        
-        self.thinking_budget_label = QLabel('Thinking budget (0-24576):')
-        self.thinking_budget_input = QLineEdit()
-        self.thinking_budget_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
-        model_tuning2_layout.addWidget(self.thinking_budget_label)
-        model_tuning2_layout.addWidget(self.thinking_budget_input)
 
-        self.top_k_label = QLabel('Top-k sampling (≥0):')
+        self.top_k_label = QLabel('Top K:')
         self.top_k_input = QLineEdit()
+        self.top_k_input.setPlaceholderText("≥0")
         self.top_k_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
+        # model_tuning2_layout.addStretch(1)
         model_tuning2_layout.addWidget(self.top_k_label)
         model_tuning2_layout.addWidget(self.top_k_input)
+        
+        self.thinking_budget_label = QLabel('Thinking budget:')
+        self.thinking_budget_input = QLineEdit()
+        self.thinking_budget_input.setPlaceholderText("0-24576")
+        self.thinking_budget_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
+        model_tuning2_layout.addStretch(1)
+        model_tuning2_layout.addWidget(self.thinking_budget_label)
+        model_tuning2_layout.addWidget(self.thinking_budget_input)
         
         translation_layout.addLayout(model_tuning2_layout)
 
@@ -195,27 +210,37 @@ class TranslatorGUI(QWidget):
         tuning_checkbox1_layout.setContentsMargins(0, 5, 0, 5)
 
         self.thinking_checkbox = QCheckBox('Enable thinking')
+        tuning_checkbox1_layout.addStretch(1)
         tuning_checkbox1_layout.addWidget(self.thinking_checkbox)
         translation_layout.addLayout(tuning_checkbox1_layout)
 
-        translation_group.setLayout(translation_layout)
-        return translation_group
+        return settings_group
 
-    def _create_input_file_controls_layout(self):
+    def _create_input_file_controls_group(self):
+        input_file_group = QGroupBox("Translation Queue")
         input_file_main_layout = QVBoxLayout()
         input_file_main_layout.setSpacing(5)
-        input_file_main_layout.setContentsMargins(0, 0, 0, 0)
-        self.input_file_label = QLabel('Input File:')
-        input_file_layout = QHBoxLayout()
-        self.input_file_display = QLineEdit()
-        self.input_file_display.setReadOnly(True)
-        self.browse_button = QPushButton('Browse')
-        self.browse_button.clicked.connect(self.browseFile)
-        input_file_layout.addWidget(self.input_file_display)
-        input_file_layout.addWidget(self.browse_button)
-        input_file_main_layout.addWidget(self.input_file_label)
-        input_file_main_layout.addLayout(input_file_layout)
-        return input_file_main_layout
+        input_file_main_layout.setContentsMargins(10, 5, 10, 5)
+
+        self.file_list_widget = QListWidget()
+        self.file_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+
+        buttons_layout = QHBoxLayout()
+        self.add_files_button = QPushButton("Add Files")
+        self.add_files_button.clicked.connect(self.addFiles)
+        self.remove_files_button = QPushButton("Remove Selected")
+        self.remove_files_button.clicked.connect(self.removeSelectedFiles)
+        self.clear_files_button = QPushButton("Clear All")
+        self.clear_files_button.clicked.connect(self.clearFiles)
+
+        buttons_layout.addWidget(self.add_files_button)
+        buttons_layout.addWidget(self.remove_files_button)
+        buttons_layout.addWidget(self.clear_files_button)
+
+        input_file_main_layout.addWidget(self.file_list_widget)
+        input_file_main_layout.addLayout(buttons_layout)
+        input_file_group.setLayout(input_file_main_layout)
+        return input_file_group
 
     def _create_contextual_input_files_group(self):
         self.contextual_input_files_group = QGroupBox("Contextual Input Files (Optional)")
@@ -391,7 +416,7 @@ class TranslatorGUI(QWidget):
 
         button_layout = QHBoxLayout()
         button_layout.setSpacing(10)
-        button_layout.setContentsMargins(10, 0, 10, 0)
+        button_layout.setContentsMargins(10, 10, 10, 0)
         button_layout.addWidget(self.save_button)
         button_layout.addWidget(self.run_button)
         return button_layout
@@ -410,57 +435,74 @@ class TranslatorGUI(QWidget):
         main_layout.setSpacing(5)
         main_layout.setContentsMargins(10, 10, 10, 5)
 
-        main_layout.addWidget(self._create_header())
-        main_layout.addWidget(self._create_line_separator())
+        # --- Create Tab Widget ---
+        tab_widget = QTabWidget()
 
-        columns_layout = QHBoxLayout()
+        # --- Translation Tab ---
+        translation_tab = QWidget()
+        translation_layout = QVBoxLayout(translation_tab)
+        translation_layout.setSpacing(10)
+        translation_layout.setContentsMargins(5, 10, 5, 10)
 
-        # Left column
-        left_layout = QVBoxLayout()
-        left_layout.setSpacing(0) # Set base spacing to 0 for manual control
-        left_layout.setContentsMargins(5, 10, 5, 10)
+        translation_layout.addWidget(self._create_input_file_controls_group())
+        translation_layout.addWidget(self._create_contextual_input_files_group())
+        translation_layout.addStretch(1)
 
-        left_layout.addWidget(self._create_translation_settings_group())
-        left_layout.addSpacing(10) # Gap after Translation Settings
+        # --- Settings Tab ---
+        settings_tab = QWidget()
+        settings_layout = QVBoxLayout(settings_tab)
+        settings_columns_layout = QHBoxLayout()
 
-        left_layout.addWidget(self._create_contextual_input_files_group())
-        left_layout.addSpacing(10) # Gap after Contextual Input Files
+        # Left column for settings
+        settings_left_layout = QVBoxLayout()
+        settings_left_layout.setSpacing(0)
+        settings_left_layout.setContentsMargins(5, 10, 5, 10)
+        settings_left_layout.addWidget(self._create_model_context_settings_group())
+        settings_left_layout.addStretch(1)
 
-        left_layout.addLayout(self._create_input_file_controls_layout())
-        # No specific gap needed before stretch if layout ends here for visible items
+        # Right column for settings
+        settings_right_layout = QVBoxLayout()
+        settings_right_layout.setSpacing(0)
+        settings_right_layout.setContentsMargins(5, 10, 5, 10)
+        settings_right_layout.addWidget(self._create_api_key_group())
+        settings_right_layout.addSpacing(10)
+        settings_right_layout.addWidget(self._create_advanced_settings_group())
+        settings_right_layout.addStretch(1)
 
-        left_layout.addStretch(1) # Add stretch to push content up
+        settings_columns_layout.addLayout(settings_left_layout)
+        settings_columns_layout.addLayout(settings_right_layout)
+        settings_layout.addLayout(settings_columns_layout)
 
-        # Right column
-        right_layout = QVBoxLayout()
-        right_layout.setSpacing(0) # Set base spacing to 0 for manual control
-        right_layout.setContentsMargins(5, 10, 5, 10)
+        # --- Add tabs to widget ---
+        tab_widget.addTab(translation_tab, "Translation")
+        tab_widget.addTab(settings_tab, "Settings")
 
-        right_layout.addWidget(self._create_api_key_group())
-        right_layout.addSpacing(10) # Gap after API Key Management
-
-        right_layout.addWidget(self._create_advanced_settings_group())
-        # No specific gap needed before stretch if layout ends here for visible items
-
-        right_layout.addStretch(1) # Add stretch to push content up
-        right_layout.addSpacing(10) # Gap before Action Buttons
-        right_layout.addLayout(self._create_action_buttons_layout())
-
-        # Add left and right layouts to columns layout
-        columns_layout.addLayout(left_layout)
-        columns_layout.addLayout(right_layout)
-        main_layout.addLayout(columns_layout)
-        
+        # --- Add Tab Widget and global elements to main layout ---
+        main_layout.addWidget(tab_widget)
+        main_layout.addLayout(self._create_action_buttons_layout())
         main_layout.addWidget(self._create_line_separator())
         main_layout.addWidget(self._create_footer())
 
         # Set main layout
         self.setLayout(main_layout)
 
-    def browseFile(self):
-        file_name, _ = QFileDialog.getOpenFileName(self, "Select Input File", "", "SRT Files (*.srt);;All Files (*)")
-        if file_name:
-            self.input_file_display.setText(file_name)
+    def addFiles(self):
+        file_names, _ = QFileDialog.getOpenFileNames(self, "Select Input File(s)", "", "SRT Files (*.srt);;All Files (*)")
+        if file_names:
+            current_files = [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())]
+            for file_name in file_names:
+                if file_name not in current_files:
+                    self.file_list_widget.addItem(file_name)
+
+    def removeSelectedFiles(self):
+        selected_items = self.file_list_widget.selectedItems()
+        if not selected_items:
+            return
+        for item in selected_items:
+            self.file_list_widget.takeItem(self.file_list_widget.row(item))
+
+    def clearFiles(self):
+        self.file_list_widget.clear()
 
     def browseVideoFile(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Video File", "", "Video Files (*.mp4 *.mkv *.avi *.mov);;All Files (*)")
@@ -531,7 +573,7 @@ class TranslatorGUI(QWidget):
             KEY_THOUGHTS_LOG: self.thoughts_log_checkbox.isChecked(),
             KEY_USE_COLORS: self.use_colors_checkbox.isChecked(),
             KEY_FREE_QUOTA: self.free_quota_checkbox.isChecked(),
-            KEY_INPUT_FILE: self.input_file_display.text(),
+            KEY_INPUT_FILES: [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())],
             KEY_VIDEO_FILE: self.video_file_display.text(),
             KEY_AUDIO_FILE: self.audio_file_display.text(),
             KEY_EXTRACT_AUDIO: self.extract_audio_checkbox.isChecked(),
@@ -556,10 +598,6 @@ class TranslatorGUI(QWidget):
         elif self.target_language_combo.count() > 0: # Fallback to first item if saved one not found
             self.target_language_combo.setCurrentIndex(0)
 
-        # Model name will be set if it exists after populateModels, or user selects.
-        # We store the desired model name from settings; populateModels will try to use it.
-        self.model_name_combo.setCurrentText(self.settings[KEY_MODEL_NAME]) # Initial attempt
-
         self.start_line_input.setText(self.settings[KEY_START_LINE])
         self.temperature_input.setText(self.settings[KEY_TEMPERATURE])
         self.top_p_input.setText(self.settings[KEY_TOP_P])
@@ -572,7 +610,8 @@ class TranslatorGUI(QWidget):
         self.thoughts_log_checkbox.setChecked(self.settings[KEY_THOUGHTS_LOG])
         self.use_colors_checkbox.setChecked(self.settings[KEY_USE_COLORS])
         self.free_quota_checkbox.setChecked(self.settings[KEY_FREE_QUOTA])
-        self.input_file_display.setText(self.settings[KEY_INPUT_FILE])
+        self.file_list_widget.clear()
+        self.file_list_widget.addItems(self.settings.get(KEY_INPUT_FILES, []))
         self.video_file_display.setText(self.settings[KEY_VIDEO_FILE])
         self.audio_file_display.setText(self.settings[KEY_AUDIO_FILE])
         self.extract_audio_checkbox.setChecked(self.settings[KEY_EXTRACT_AUDIO])
@@ -583,19 +622,25 @@ class TranslatorGUI(QWidget):
         # Call the toggle method to set visibility and adjust size
         self._toggle_contextual_group_and_resize(self.settings[KEY_CONTEXT_FILES_VISIBLE])
 
+        # Automatically populate models on startup if API key is present
+        if self.api_key_input.text():
+            self.populateModels()
+
     def runTranslation(self):
         # --- Validation of required fields ---
         required_fields_map = {
             self.api_key_input: "Gemini API Key",
             self.batch_size_input: "Batch Size",
             self.start_line_input: "Start Line",
-            self.input_file_display: "Input File",
         }
         for widget, name in required_fields_map.items():
             if not widget.text().strip():
                 QMessageBox.warning(self, "Input Error", f"{name} is required.")
                 return
 
+        if self.file_list_widget.count() == 0:
+            QMessageBox.warning(self, "Input Error", "At least one Input File is required in the queue.")
+            return
         if not self.target_language_combo.currentText():
             QMessageBox.warning(self, "Input Error", "Target Language must be selected.")
             return
@@ -610,10 +655,7 @@ class TranslatorGUI(QWidget):
         gst.gemini_api_key = self.api_key_input.text()
         gst.gemini_api_key2 = self.api_key2_input.text()
         gst.target_language = self.target_language_combo.currentText()
-        input_file = self.input_file_display.text()
-        gst.input_file = input_file
-        gst.output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
-        gst.description = self.description_input.toPlainText()
+        gst.description = self.description_input.toPlainText() # Set once
         gst.model_name = self.model_name_combo.currentText()
 
         # Numeric field parsing with specific error messages
@@ -689,12 +731,43 @@ class TranslatorGUI(QWidget):
         gst.extract_audio = self.extract_audio_checkbox.isChecked()
         gst.quiet_mode = self.quiet_mode_checkbox.isChecked()
         gst.resume = self.resume_checkbox.isChecked()
-        
-        try:
-            gst.translate()
-            QMessageBox.information(self, "Success", "Translation completed successfully!")
-        except Exception as e:
-            QMessageBox.critical(self, "Translation Error", f"An error occurred during translation: {e}\n\nPlease check your settings and the console output if available.")
+
+        # --- New loop logic ---
+        files_to_translate = [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())]
+        total_files = len(files_to_translate)
+        errors = []
+        completed_count = 0
+
+        self.run_button.setEnabled(False)
+        self.save_button.setEnabled(False)
+
+        for i, input_file in enumerate(files_to_translate):
+            self.setWindowTitle(f"{APP_TITLE} - Translating {i+1}/{total_files}: {os.path.basename(input_file)}")
+            QApplication.processEvents()
+
+            gst.input_file = input_file
+            gst.output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
+
+            try:
+                gst.translate()
+                completed_count += 1
+            except Exception as e:
+                error_message = f"Failed to translate {os.path.basename(input_file)}: {e}"
+                errors.append(error_message)
+                reply = QMessageBox.question(self, 'Translation Error', f"{error_message}\n\nPlease check your settings and the console output if available.\n\nDo you want to continue with the next file?",
+                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.No:
+                    break
+
+        self.run_button.setEnabled(True)
+        self.save_button.setEnabled(True)
+        self.setWindowTitle(APP_TITLE)
+
+        if not errors:
+            QMessageBox.information(self, "Success", f"Translation completed successfully for all {total_files} files!")
+        else:
+            error_summary = "\n".join(errors)
+            QMessageBox.warning(self, "Translation Finished", f"{completed_count} of {total_files} files were processed.\n\nErrors occurred:\n{error_summary}")
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
