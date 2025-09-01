@@ -27,22 +27,51 @@ This GUI simplifies the process of translating subtitle files (`.srt`) by provid
 *   PyQt6
 
 ## Installation & Usage
+ 
+### Quick Start (Linux / macOS)
+ 
+The `translate.sh` script automates the entire setup.
 
-1.  **Install the core translator:**
+First, ensure `translate.sh`, `srt_translator-gui.pyw`, and `requirements.txt` are all in the same folder.
+ 
+1.  **Make the script executable (only need to do this once):**
     ```bash
-    pip install gemini-srt-translator
+    chmod +x translate.sh
     ```
-
-2.  **Install PyQt6:**
+ 
+2.  **Run the script:**
     ```bash
-    pip install PyQt6
+    ./translate.sh
     ```
-
-3.  **Download and run the GUI:**
-    Download the `srt_translator-gui.pyw` file and run it.
-
-4.  **Configure and Translate:**
-    *   Go to the "Settings" tab and enter your Gemini API Key. Click "List Models" to populate the model list.
-    *   Adjust any other settings as needed and click "Save".
-    *   Go to the "Translation" tab, add your SRT files to the queue.
-    *   Click "Run" to start the translation process.
+    The first time you run it, the script will automatically create a Python virtual environment, install all required dependencies, and launch the application. Subsequent runs will be much faster.
+ 
+### Manual Installation (Windows / Other)
+ 
+If you are on Windows or prefer a manual setup:
+ 
+1.  **Create and Activate a Virtual Environment:**
+    ```bash
+    # Create the environment
+    python3 -m venv translator_app
+ 
+    # Activate on Windows
+    .\translator_app\Scripts\activate
+ 
+    # Activate on Linux/macOS
+    source translator_app/bin/activate
+    ```
+ 
+2.  **Install Dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+ 
+3.  **Run the GUI:**
+    ```bash
+    python srt_translator-gui.pyw
+    ```
+ 
+### How to Use the GUI
+ 
+1.  **Configure:** Go to the "Settings" tab and enter your Gemini API Key. Click "List Models" to populate the model list. Adjust any other settings as needed and click "Save".
+2.  **Translate:** Go to the "Translation" tab, add your SRT files to the queue, and click "Run" to start the translation process.
