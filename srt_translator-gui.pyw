@@ -3,11 +3,18 @@ import os
 import json
 import io
 import importlib
+import tempfile
+import contextlib
+from pathlib import Path
+from typing import Dict, Any
+import multiprocessing
+
 from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit, QComboBox, QCheckBox, QPushButton, QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox, QGroupBox, QFrame, QListWidget, QTabWidget
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # --- Constants ---
-SETTINGS_FILE = 'settings.json'
+# Reverted: store settings next to the script (original behavior)
+SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
 # Settings Keys
 KEY_API_KEY = 'api_key'
@@ -35,6 +42,9 @@ KEY_EXTRACT_AUDIO = 'extract_audio'
 KEY_QUIET_MODE = 'quiet_mode'
 KEY_RESUME = 'resume'
 KEY_CONTEXT_FILES_VISIBLE = 'context_files_visible'
+KEY_ISOLATE_VOICE = 'isolate_voice'
+KEY_AUDIO_CHUNK_SIZE = 'audio_chunk_size'
+KEY_THINKING_LEVEL = 'thinking_level'
 
 # Deprecated key for migration
 KEY_INPUT_FILE = 'input_file'
@@ -45,7 +55,7 @@ DEFAULT_SETTINGS = {
     KEY_DESCRIPTION: '',
     KEY_BATCH_SIZE: '300',
     KEY_TARGET_LANGUAGE: 'Estonian',
-    KEY_MODEL_NAME: 'gemini-2.5-flash-preview-05-20',
+    KEY_MODEL_NAME: 'gemini-2.5-flash',
     KEY_START_LINE: '1',
     KEY_TEMPERATURE: '0.7',
     KEY_TOP_P: '0.95',
@@ -65,11 +75,14 @@ DEFAULT_SETTINGS = {
     KEY_QUIET_MODE: False,
     KEY_RESUME: True,
     KEY_CONTEXT_FILES_VISIBLE: False,
+    KEY_ISOLATE_VOICE: True,
+    KEY_AUDIO_CHUNK_SIZE: '600',
+    KEY_THINKING_LEVEL: 'medium',
 }
 
 # UI Literals
-APP_TITLE = "Gemini SRT Translator v2.1.4 GUI"
-FOOTER_TEXT = "Made by e6on & Gemini AI, 2025"
+APP_TITLE = "Gemini SRT Translator v3 GUI"
+FOOTER_TEXT = "Made by e6on & AI, 2025"
 MODEL_NAME_COMBO_WIDTH = 280
 NUMERIC_INPUT_FIXED_WIDTH = 70
 BATCH_LINE_INPUT_FIXED_WIDTH = 70
@@ -78,38 +91,52 @@ SUPPORTED_LANGUAGES = [
     "Albanian", "Belarusian", "Bosnian", "Bulgarian", "Catalan", "Croatian", "Czech", "Danish", "Dutch", "English", "Estonian", "Finnish", "French", "Galician", "German", "Greek", "Hungarian", "Icelandic", "Irish", "Italian", "Latvian", "Lithuanian", "Luxembourgish", "Macedonian", "Maltese", "Norwegian", "Polish", "Portuguese", "Romanian", "Russian", "Scots Gaelic", "Serbian", "Slovak", "Slovenian", "Spanish", "Swedish", "Ukrainian", "Welsh", "Yiddish"
 ]
 
-# Function to save settings to a file
-def save_settings(settings):
-    with open(SETTINGS_FILE, 'w') as f:
-        json.dump(settings, f, indent=4)
+# Function to save settings to a file (atomic)
+def save_settings(settings: Dict[str, Any]):
+    try:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # Write to a temp file first then atomically replace
+        with tempfile.NamedTemporaryFile('w', delete=False, dir=str(SETTINGS_FILE.parent), encoding='utf-8') as tf:
+            json.dump(settings, tf, indent=4, ensure_ascii=False)
+            tempname = tf.name
+        os.replace(tempname, SETTINGS_FILE)
+    except Exception as e:
+        raise
 
 # Function to load settings from a file
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        with open(SETTINGS_FILE, 'r') as f:
-            try:
+def load_settings() -> Dict[str, Any]:
+    if SETTINGS_FILE.exists():
+        try:
+            with SETTINGS_FILE.open('r', encoding='utf-8') as f:
                 loaded_settings = json.load(f)
-
-                # --- Migration from old settings format ---
-                if KEY_INPUT_FILE in loaded_settings and loaded_settings[KEY_INPUT_FILE]:
-                    if KEY_INPUT_FILES not in loaded_settings:
+            # --- Migration from old settings format ---
+            if isinstance(loaded_settings, dict):
+                if KEY_INPUT_FILE in loaded_settings and loaded_settings.get(KEY_INPUT_FILE):
+                    if KEY_INPUT_FILES not in loaded_settings or not isinstance(loaded_settings.get(KEY_INPUT_FILES), list):
                         loaded_settings[KEY_INPUT_FILES] = []
                     # Add the old file to the list if it's not already there
                     if loaded_settings[KEY_INPUT_FILE] not in loaded_settings[KEY_INPUT_FILES]:
                         loaded_settings[KEY_INPUT_FILES].insert(0, loaded_settings[KEY_INPUT_FILE])
-                # Now remove the old key so it doesn't get carried over
-                if KEY_INPUT_FILE in loaded_settings:
-                    del loaded_settings[KEY_INPUT_FILE]
-                # --- End Migration ---
-
-                # Merge with defaults to ensure all keys are present
-                settings = DEFAULT_SETTINGS.copy()
-                settings.update(loaded_settings)
-                return settings
-            except json.JSONDecodeError:
-                # Corrupted file, return defaults
+                # Remove deprecated key
+                loaded_settings.pop(KEY_INPUT_FILE, None)
+            else:
                 return DEFAULT_SETTINGS.copy()
-    return DEFAULT_SETTINGS.copy()
+            # Merge with defaults to ensure all keys present
+            settings = DEFAULT_SETTINGS.copy()
+            settings.update(loaded_settings)
+            # Ensure mutable defaults are copies
+            settings[KEY_INPUT_FILES] = list(settings.get(KEY_INPUT_FILES) or [])
+            # Enforce types for common boolean fields (in case JSON saved strings)
+            for bool_key in [KEY_THINKING, KEY_SKIP_UPGRADE, KEY_STREAMING, KEY_PROGRESS_LOG, KEY_THOUGHTS_LOG, KEY_USE_COLORS, KEY_FREE_QUOTA, KEY_EXTRACT_AUDIO, KEY_QUIET_MODE, KEY_RESUME, KEY_CONTEXT_FILES_VISIBLE, KEY_ISOLATE_VOICE]:
+                if isinstance(settings.get(bool_key), str):
+                    settings[bool_key] = settings[bool_key].lower() in ('1', 'true', 'yes', 'on')
+            return settings
+        except json.JSONDecodeError:
+            return DEFAULT_SETTINGS.copy()
+        except Exception:
+            return DEFAULT_SETTINGS.copy()
+    else:
+        return DEFAULT_SETTINGS.copy()
 
 class TranslatorGUI(QWidget):
     def __init__(self):
@@ -169,7 +196,6 @@ class TranslatorGUI(QWidget):
         self.top_p_input = QLineEdit()
         self.top_p_input.setPlaceholderText("0.0-1.0")
         self.top_p_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
-        # model_tuning1_layout.addStretch(1)
         model_tuning1_layout.addWidget(self.top_p_label)
         model_tuning1_layout.addWidget(self.top_p_input)
 
@@ -191,7 +217,6 @@ class TranslatorGUI(QWidget):
         self.top_k_input = QLineEdit()
         self.top_k_input.setPlaceholderText("≥0")
         self.top_k_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
-        # model_tuning2_layout.addStretch(1)
         model_tuning2_layout.addWidget(self.top_k_label)
         model_tuning2_layout.addWidget(self.top_k_input)
         
@@ -209,6 +234,13 @@ class TranslatorGUI(QWidget):
         tuning_checkbox1_layout.setSpacing(5)
         tuning_checkbox1_layout.setContentsMargins(0, 5, 0, 5)
 
+        self.thinking_level_label = QLabel('Thinking Level:')
+        self.thinking_level_combo = QComboBox()
+        self.thinking_level_combo.addItems(["minimal", "low", "medium", "high"])
+        self.thinking_level_combo.setFixedWidth(100)
+        tuning_checkbox1_layout.addWidget(self.thinking_level_label)
+        tuning_checkbox1_layout.addWidget(self.thinking_level_combo)
+
         self.thinking_checkbox = QCheckBox('Enable thinking')
         tuning_checkbox1_layout.addStretch(1)
         tuning_checkbox1_layout.addWidget(self.thinking_checkbox)
@@ -222,8 +254,8 @@ class TranslatorGUI(QWidget):
         input_file_main_layout.setSpacing(5)
         input_file_main_layout.setContentsMargins(10, 5, 10, 5)
 
-        self.file_list_widget = QListWidget()
-        self.file_list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        # Use custom FileListWidget that accepts drag & drop of .srt files
+        self.file_list_widget = FileListWidget()
 
         buttons_layout = QHBoxLayout()
         self.add_files_button = QPushButton("Add Files")
@@ -258,7 +290,19 @@ class TranslatorGUI(QWidget):
         content_elements_layout.setContentsMargins(10, 5, 10, 5) # Original content margins
 
         extract_audio_layout = QHBoxLayout()
+        extract_audio_layout.setSpacing(15)
+        extract_audio_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.audio_chunk_size_label = QLabel('Audio Chunk (s):')
+        self.audio_chunk_size_input = QLineEdit()
+        self.audio_chunk_size_input.setFixedWidth(NUMERIC_INPUT_FIXED_WIDTH)
+        self.audio_chunk_size_input.setPlaceholderText("600")
+        extract_audio_layout.addWidget(self.audio_chunk_size_label)
+        extract_audio_layout.addWidget(self.audio_chunk_size_input)
+
         extract_audio_layout.addStretch(1) # Add stretch to push checkbox to the right
+        self.isolate_voice_checkbox = QCheckBox('Isolate Voice')
+        extract_audio_layout.addWidget(self.isolate_voice_checkbox)
         self.extract_audio_checkbox = QCheckBox('Extract audio from video')
         extract_audio_layout.addWidget(self.extract_audio_checkbox)
         content_elements_layout.addLayout(extract_audio_layout)
@@ -276,6 +320,16 @@ class TranslatorGUI(QWidget):
         video_file_layout.addWidget(self.browse_video_button)
         content_elements_layout.addWidget(self.video_file_label)
         content_elements_layout.addLayout(video_file_layout)
+
+        # Extraction Buttons (SRT/Audio from Video)
+        extraction_layout = QHBoxLayout()
+        self.extract_srt_button = QPushButton("Extract SRT")
+        self.extract_srt_button.clicked.connect(lambda: self.runExtraction("srt"))
+        self.extract_audio_button = QPushButton("Extract Audio")
+        self.extract_audio_button.clicked.connect(lambda: self.runExtraction("audio"))
+        extraction_layout.addWidget(self.extract_srt_button)
+        extraction_layout.addWidget(self.extract_audio_button)
+        content_elements_layout.addLayout(extraction_layout)
 
         # Audio File
         self.audio_file_label = QLabel('Audio File (for context):')
@@ -353,6 +407,7 @@ class TranslatorGUI(QWidget):
         self.start_line_label = QLabel('Start Line:')
         self.start_line_input = QLineEdit()
         self.start_line_input.setFixedWidth(BATCH_LINE_INPUT_FIXED_WIDTH)
+        self.start_line_input.setPlaceholderText("1")
         lines_input_layout.addWidget(self.start_line_label)
         lines_input_layout.addWidget(self.start_line_input)
         
@@ -527,19 +582,17 @@ class TranslatorGUI(QWidget):
 
         gst.gemini_api_key = self.api_key_input.text()
 
-        original_stdout = sys.stdout
-        sys.stdout = buffer = io.StringIO()
+        buffer = io.StringIO()
         models = []
         try:
-            gst.listmodels()
+            with contextlib.redirect_stdout(buffer):
+                gst.listmodels()
             models_output = buffer.getvalue().strip()
             if models_output:
                 models = [model.strip() for model in models_output.split('\n') if model.strip()]
         except Exception as e:
             QMessageBox.critical(self, "Error Listing Models", f"An error occurred while listing models: {e}")
             return
-        finally:
-            sys.stdout = original_stdout # Ensure stdout is always restored
 
         if models:
             self.model_name_combo.clear()
@@ -548,8 +601,13 @@ class TranslatorGUI(QWidget):
             desired_model = self.settings.get(KEY_MODEL_NAME, DEFAULT_SETTINGS[KEY_MODEL_NAME])
             if desired_model in models:
                 self.model_name_combo.setCurrentText(desired_model)
-            elif self.model_name_combo.count() > 0:
-                self.model_name_combo.setCurrentIndex(0)
+            else:
+                # preserve saved model by adding it if not present
+                if desired_model:
+                    self.model_name_combo.insertItem(0, desired_model)
+                    self.model_name_combo.setCurrentIndex(0)
+                elif self.model_name_combo.count() > 0:
+                    self.model_name_combo.setCurrentIndex(0)
         else:
             QMessageBox.warning(self, "No Models Found", "Failed to retrieve models or no models available. Check API key and network.")
 
@@ -580,47 +638,59 @@ class TranslatorGUI(QWidget):
             KEY_QUIET_MODE: self.quiet_mode_checkbox.isChecked(),
             KEY_RESUME: self.resume_checkbox.isChecked(),
             KEY_CONTEXT_FILES_VISIBLE: self.contextual_input_files_group.isChecked(),
+            KEY_ISOLATE_VOICE: self.isolate_voice_checkbox.isChecked(),
+            KEY_AUDIO_CHUNK_SIZE: self.audio_chunk_size_input.text(),
+            KEY_THINKING_LEVEL: self.thinking_level_combo.currentText(),
         }
-        save_settings(current_settings)
-        self.settings = current_settings # Update in-memory settings
-        QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully.")
+        try:
+            save_settings(current_settings)
+            self.settings = current_settings # Update in-memory settings
+            QMessageBox.information(self, "Settings Saved", "Settings have been saved successfully.")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Failed to save settings: {e}")
 
     def populate_ui_from_settings(self):
-        self.api_key_input.setText(self.settings[KEY_API_KEY])
-        self.api_key2_input.setText(self.settings[KEY_API_KEY2])
-        self.description_input.setPlainText(self.settings[KEY_DESCRIPTION])
-        self.batch_size_input.setText(self.settings[KEY_BATCH_SIZE])
-        
+        self.api_key_input.setText(self.settings.get(KEY_API_KEY, ''))
+        self.api_key2_input.setText(self.settings.get(KEY_API_KEY2, ''))
+        self.description_input.setPlainText(self.settings.get(KEY_DESCRIPTION, ''))
+        self.batch_size_input.setText(self.settings.get(KEY_BATCH_SIZE, ''))
+
         # Set target language, ensuring it's a valid choice
-        target_lang = self.settings[KEY_TARGET_LANGUAGE]
+        target_lang = self.settings.get(KEY_TARGET_LANGUAGE, DEFAULT_SETTINGS[KEY_TARGET_LANGUAGE])
         if self.target_language_combo.findText(target_lang) != -1:
             self.target_language_combo.setCurrentText(target_lang)
         elif self.target_language_combo.count() > 0: # Fallback to first item if saved one not found
             self.target_language_combo.setCurrentIndex(0)
 
-        self.start_line_input.setText(self.settings[KEY_START_LINE])
-        self.temperature_input.setText(self.settings[KEY_TEMPERATURE])
-        self.top_p_input.setText(self.settings[KEY_TOP_P])
-        self.thinking_budget_input.setText(self.settings[KEY_THINKING_BUDGET])
-        self.thinking_checkbox.setChecked(self.settings[KEY_THINKING])
-        self.top_k_input.setText(self.settings[KEY_TOP_K])
-        self.skip_upgrade_checkbox.setChecked(self.settings[KEY_SKIP_UPGRADE])
-        self.streaming_checkbox.setChecked(self.settings[KEY_STREAMING])
-        self.progress_log_checkbox.setChecked(self.settings[KEY_PROGRESS_LOG])
-        self.thoughts_log_checkbox.setChecked(self.settings[KEY_THOUGHTS_LOG])
-        self.use_colors_checkbox.setChecked(self.settings[KEY_USE_COLORS])
-        self.free_quota_checkbox.setChecked(self.settings[KEY_FREE_QUOTA])
+        self.start_line_input.setText(self.settings.get(KEY_START_LINE, '1'))
+        self.temperature_input.setText(self.settings.get(KEY_TEMPERATURE, '0.7'))
+        self.top_p_input.setText(self.settings.get(KEY_TOP_P, '0.95'))
+        self.thinking_budget_input.setText(self.settings.get(KEY_THINKING_BUDGET, '4096'))
+        self.thinking_checkbox.setChecked(bool(self.settings.get(KEY_THINKING, True)))
+        self.top_k_input.setText(self.settings.get(KEY_TOP_K, '20'))
+        self.skip_upgrade_checkbox.setChecked(bool(self.settings.get(KEY_SKIP_UPGRADE, False)))
+        self.streaming_checkbox.setChecked(bool(self.settings.get(KEY_STREAMING, True)))
+        self.progress_log_checkbox.setChecked(bool(self.settings.get(KEY_PROGRESS_LOG, False)))
+        self.thoughts_log_checkbox.setChecked(bool(self.settings.get(KEY_THOUGHTS_LOG, False)))
+        self.use_colors_checkbox.setChecked(bool(self.settings.get(KEY_USE_COLORS, True)))
+        self.free_quota_checkbox.setChecked(bool(self.settings.get(KEY_FREE_QUOTA, True)))
         self.file_list_widget.clear()
-        self.file_list_widget.addItems(self.settings.get(KEY_INPUT_FILES, []))
-        self.video_file_display.setText(self.settings[KEY_VIDEO_FILE])
-        self.audio_file_display.setText(self.settings[KEY_AUDIO_FILE])
-        self.extract_audio_checkbox.setChecked(self.settings[KEY_EXTRACT_AUDIO])
-        self.quiet_mode_checkbox.setChecked(self.settings[KEY_QUIET_MODE])
-        self.resume_checkbox.setChecked(self.settings[KEY_RESUME])
+        self.file_list_widget.addItems(list(self.settings.get(KEY_INPUT_FILES, [])))
+        self.video_file_display.setText(self.settings.get(KEY_VIDEO_FILE, ''))
+        self.audio_file_display.setText(self.settings.get(KEY_AUDIO_FILE, ''))
+        self.extract_audio_checkbox.setChecked(bool(self.settings.get(KEY_EXTRACT_AUDIO, False)))
+        self.quiet_mode_checkbox.setChecked(bool(self.settings.get(KEY_QUIET_MODE, False)))
+        self.resume_checkbox.setChecked(bool(self.settings.get(KEY_RESUME, True)))
+        self.isolate_voice_checkbox.setChecked(bool(self.settings.get(KEY_ISOLATE_VOICE, True)))
+        self.audio_chunk_size_input.setText(self.settings.get(KEY_AUDIO_CHUNK_SIZE, '600'))
+
+        thinking_level = self.settings.get(KEY_THINKING_LEVEL, 'medium')
+        if self.thinking_level_combo.findText(thinking_level) != -1:
+            self.thinking_level_combo.setCurrentText(thinking_level)
         
-        self.contextual_input_files_group.setChecked(self.settings[KEY_CONTEXT_FILES_VISIBLE])
+        self.contextual_input_files_group.setChecked(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
         # Call the toggle method to set visibility and adjust size
-        self._toggle_contextual_group_and_resize(self.settings[KEY_CONTEXT_FILES_VISIBLE])
+        self._toggle_contextual_group_and_resize(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
 
         # Automatically populate models on startup if API key is present
         if self.api_key_input.text():
@@ -631,7 +701,6 @@ class TranslatorGUI(QWidget):
         required_fields_map = {
             self.api_key_input: "Gemini API Key",
             self.batch_size_input: "Batch Size",
-            self.start_line_input: "Start Line",
         }
         for widget, name in required_fields_map.items():
             if not widget.text().strip():
@@ -649,27 +718,29 @@ class TranslatorGUI(QWidget):
             return
         # --- End Validation ---
 
-        import gemini_srt_translator as gst
-        importlib.reload(gst) # Reload to ensure fresh defaults for optional params
-        
-        gst.gemini_api_key = self.api_key_input.text()
-        gst.gemini_api_key2 = self.api_key2_input.text()
-        gst.target_language = self.target_language_combo.currentText()
-        gst.description = self.description_input.toPlainText() # Set once
-        gst.model_name = self.model_name_combo.currentText()
+        # Prepare module parameters (same keys as before)
+        gst_params = {
+            'gemini_api_key': self.api_key_input.text(),
+            'gemini_api_key2': self.api_key2_input.text(),
+            'target_language': self.target_language_combo.currentText(),
+            'description': self.description_input.toPlainText(),
+            'model_name': self.model_name_combo.currentText(),
+        }
 
-        # Numeric field parsing with specific error messages
+        # Numeric parsing with validation (keeping original behavior)
         try:
-            gst.batch_size = int(self.batch_size_input.text())
+            gst_params['batch_size'] = int(self.batch_size_input.text())
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", f"Batch Size must be a valid integer. You entered: '{self.batch_size_input.text()}'")
             return
-        try:
-            gst.start_line = int(self.start_line_input.text())
-        except ValueError:
-            QMessageBox.warning(self, "Invalid Input", f"Start Line must be a valid integer. You entered: '{self.start_line_input.text()}'")
-            return
 
+        start_line_text = self.start_line_input.text()
+        if start_line_text:
+            try:
+                gst_params['start_line'] = int(start_line_text)
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Start Line must be a valid integer. You entered: '{start_line_text}'")
+                return
         temperature_text = self.temperature_input.text()
         if temperature_text:
             try:
@@ -677,7 +748,7 @@ class TranslatorGUI(QWidget):
                 if not (0.0 <= value <= 2.0):
                     QMessageBox.warning(self, "Input Error", f"Temperature must be between 0.0 and 2.0. You entered: '{value}'")
                     return
-                gst.temperature = value
+                gst_params['temperature'] = value
             except ValueError:
                 QMessageBox.warning(self, "Invalid Input", f"Temperature must be a valid number (e.g., 0.7). You entered: '{temperature_text}'")
                 return
@@ -689,7 +760,7 @@ class TranslatorGUI(QWidget):
                 if not (0.0 <= value <= 1.0):
                     QMessageBox.warning(self, "Input Error", f"Nucleus sampling (Top P) must be between 0.0 and 1.0. You entered: '{value}'")
                     return
-                gst.top_p = value
+                gst_params['top_p'] = value
             except ValueError:
                 QMessageBox.warning(self, "Invalid Input", f"Nucleus sampling (Top P) must be a valid number (e.g., 0.9). You entered: '{top_p_text}'")
                 return
@@ -701,7 +772,7 @@ class TranslatorGUI(QWidget):
                 if not (0 <= value <= 24576):
                     QMessageBox.warning(self, "Input Error", f"Thinking budget must be between 0 and 24576. You entered: '{value}'")
                     return
-                gst.thinking_budget = value
+                gst_params['thinking_budget'] = value
             except ValueError:
                 QMessageBox.warning(self, "Invalid Input", f"Thinking budget must be a valid integer. You entered: '{thinking_budget_text}'")
                 return
@@ -713,52 +784,60 @@ class TranslatorGUI(QWidget):
                 if not (value >= 0):
                     QMessageBox.warning(self, "Input Error", f"Top-K sampling must be >= 0. You entered: '{value}'")
                     return
-                gst.top_k = value
+                gst_params['top_k'] = value
             except ValueError:
                 QMessageBox.warning(self, "Invalid Input", f"Top-K sampling must be a valid integer (e.g., 40). You entered: '{top_k_text}'")
                 return
+        
+        audio_chunk_size_text = self.audio_chunk_size_input.text()
+        if audio_chunk_size_text:
+            try:
+                value = int(audio_chunk_size_text)
+                if value <= 0:
+                    QMessageBox.warning(self, "Input Error", f"Audio Chunk Size must be > 0. You entered: '{value}'")
+                    return
+                gst_params['audio_chunk_size'] = value
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Audio Chunk Size must be a valid integer. You entered: '{audio_chunk_size_text}'")
+                return
 
-        gst.thinking = self.thinking_checkbox.isChecked()
-        gst.skip_upgrade = self.skip_upgrade_checkbox.isChecked()
-        gst.streaming = self.streaming_checkbox.isChecked()
-        gst.progress_log = self.progress_log_checkbox.isChecked()
-        gst.thoughts_log = self.thoughts_log_checkbox.isChecked()
-        gst.use_colors = self.use_colors_checkbox.isChecked()
-        gst.free_quota = self.free_quota_checkbox.isChecked()
+        # Booleans and file params
+        gst_params['thinking'] = self.thinking_checkbox.isChecked()
+        gst_params['skip_upgrade'] = self.skip_upgrade_checkbox.isChecked()
+        gst_params['streaming'] = self.streaming_checkbox.isChecked()
+        gst_params['progress_log'] = self.progress_log_checkbox.isChecked()
+        gst_params['thoughts_log'] = self.thoughts_log_checkbox.isChecked()
+        gst_params['use_colors'] = self.use_colors_checkbox.isChecked()
+        gst_params['free_quota'] = self.free_quota_checkbox.isChecked()
+        gst_params['video_file'] = self.video_file_display.text()
+        gst_params['audio_file'] = self.audio_file_display.text()
+        gst_params['extract_audio'] = self.extract_audio_checkbox.isChecked()
+        gst_params['quiet_mode'] = self.quiet_mode_checkbox.isChecked()
+        gst_params['resume'] = self.resume_checkbox.isChecked()
+        gst_params['isolate_voice'] = self.isolate_voice_checkbox.isChecked()
+        gst_params['thinking_level'] = self.thinking_level_combo.currentText()
 
-        gst.video_file = self.video_file_display.text()
-        gst.audio_file = self.audio_file_display.text()
-        gst.extract_audio = self.extract_audio_checkbox.isChecked()
-        gst.quiet_mode = self.quiet_mode_checkbox.isChecked()
-        gst.resume = self.resume_checkbox.isChecked()
-
-        # --- New loop logic ---
         files_to_translate = [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())]
         total_files = len(files_to_translate)
-        errors = []
-        completed_count = 0
+        if total_files == 0:
+            QMessageBox.warning(self, "Input Error", "No files to translate.")
+            return
 
+        # Disable UI controls while running
         self.run_button.setEnabled(False)
         self.save_button.setEnabled(False)
 
-        for i, input_file in enumerate(files_to_translate):
-            self.setWindowTitle(f"{APP_TITLE} - Translating {i+1}/{total_files}: {os.path.basename(input_file)}")
-            QApplication.processEvents()
+        # Create and start background thread
+        self._translation_thread = TranslationThread(files_to_translate, gst_params)
+        self._translation_thread.progress.connect(self._on_translation_progress)
+        self._translation_thread.finished_signal.connect(self._on_translation_finished)
+        self._translation_thread.start()
 
-            gst.input_file = input_file
-            gst.output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
+    def _on_translation_progress(self, index: int, total: int, filename: str):
+        self.setWindowTitle(f"{APP_TITLE} - Translating {index}/{total}: {filename}")
+        QApplication.processEvents()
 
-            try:
-                gst.translate()
-                completed_count += 1
-            except Exception as e:
-                error_message = f"Failed to translate {os.path.basename(input_file)}: {e}"
-                errors.append(error_message)
-                reply = QMessageBox.question(self, 'Translation Error', f"{error_message}\n\nPlease check your settings and the console output if available.\n\nDo you want to continue with the next file?",
-                                             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-                if reply == QMessageBox.StandardButton.No:
-                    break
-
+    def _on_translation_finished(self, completed_count: int, total_files: int, errors):
         self.run_button.setEnabled(True)
         self.save_button.setEnabled(True)
         self.setWindowTitle(APP_TITLE)
@@ -769,9 +848,194 @@ class TranslatorGUI(QWidget):
             error_summary = "\n".join(errors)
             QMessageBox.warning(self, "Translation Finished", f"{completed_count} of {total_files} files were processed.\n\nErrors occurred:\n{error_summary}")
 
+    def runExtraction(self, mode):
+        video_file = self.video_file_display.text()
+        if not video_file or not os.path.exists(video_file):
+             QMessageBox.warning(self, "Input Error", "Please select a valid video file first.")
+             return
+        
+        isolate_voice = self.isolate_voice_checkbox.isChecked()
+        
+        self.extract_srt_button.setEnabled(False)
+        self.extract_audio_button.setEnabled(False)
+        self.setWindowTitle(f"{APP_TITLE} - Extracting {mode}...")
+        
+        self._extraction_thread = ExtractionThread(video_file, mode, isolate_voice)
+        self._extraction_thread.finished_signal.connect(self._on_extraction_finished)
+        self._extraction_thread.start()
+
+    def _on_extraction_finished(self, status, msg):
+        self.extract_srt_button.setEnabled(True)
+        self.extract_audio_button.setEnabled(True)
+        self.setWindowTitle(APP_TITLE)
+        
+        if status == "ok":
+            QMessageBox.information(self, "Extraction Complete", msg)
+        else:
+            QMessageBox.critical(self, "Extraction Error", msg)
+
+class FileListWidget(QListWidget):
+    """QListWidget that accepts dragged files/folders (adds .srt files)."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        # Keep selection mode consistent with previous behavior
+        self.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            return super().dropEvent(event)
+
+        current_files = [self.item(i).text() for i in range(self.count())]
+        added = False
+
+        for url in event.mimeData().urls():
+            path = url.toLocalFile()
+            if not path:
+                continue
+            # if a directory is dropped, walk and add .srt files
+            if os.path.isdir(path):
+                for root, _, files in os.walk(path):
+                    for f in files:
+                        if f.lower().endswith('.srt'):
+                            fp = os.path.join(root, f)
+                            if fp not in current_files:
+                                self.addItem(fp)
+                                current_files.append(fp)
+                                added = True
+            else:
+                if path.lower().endswith('.srt'):
+                    if path not in current_files:
+                        self.addItem(path)
+                        current_files.append(path)
+                        added = True
+
+        if added:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+# New helper: run a single translation in a separate process
+def _run_translate_worker(params: dict, input_file: str, output_file: str, result_queue: multiprocessing.Queue):
+    """
+    Worker function executed in a separate process. It imports the gemini_srt_translator
+    module, applies params, runs translate() and reports status via result_queue.
+    """
+    try:
+        import importlib
+        import gemini_srt_translator as gst
+        importlib.reload(gst)
+        # Apply provided params (ignore failures)
+        for k, v in (params or {}).items():
+            try:
+                setattr(gst, k, v)
+            except Exception:
+                pass
+        gst.input_file = input_file
+        gst.output_file = output_file
+        gst.translate()
+        result_queue.put(("ok", input_file, ""))
+    except Exception as e:
+        # Return the exception string to the parent
+        result_queue.put(("error", input_file, str(e)))
+
+def _run_extract_worker(video_file: str, mode: str, isolate_voice: bool, result_queue: multiprocessing.Queue):
+    """
+    Worker function for extracting SRT or Audio from video.
+    """
+    try:
+        import importlib
+        import gemini_srt_translator as gst
+        importlib.reload(gst)
+        gst.video_file = video_file
+        gst.isolate_voice = isolate_voice
+        gst.extract(mode)
+        result_queue.put(("ok", f"Extracted {mode} successfully."))
+    except Exception as e:
+        result_queue.put(("error", str(e)))
+
+# Replace TranslationThread to use multiprocessing per-file worker
+class TranslationThread(QThread):
+    # emits: current_index, total_files, filename
+    progress = pyqtSignal(int, int, str)
+    # emits: completed_count, total_files, errors (list)
+    finished_signal = pyqtSignal(int, int, object)
+
+    def __init__(self, files_to_translate: list, gst_params: dict):
+        super().__init__()
+        self.files = files_to_translate
+        self.params = gst_params
+
+    def run(self):
+        ctx = multiprocessing.get_context('spawn')
+        total = len(self.files)
+        errors = []
+        completed = 0
+
+        for idx, input_file in enumerate(self.files, start=1):
+            self.progress.emit(idx, total, os.path.basename(input_file))
+
+            output_file = f"{os.path.splitext(input_file)[0]}_translated.srt"
+            result_queue = ctx.Queue()
+
+            p = ctx.Process(target=_run_translate_worker, args=(self.params, input_file, output_file, result_queue))
+            p.start()
+            p.join()  # wait for process to finish
+
+            # attempt to get result (guarded)
+            try:
+                status, fname, msg = result_queue.get_nowait()
+            except Exception:
+                status, fname, msg = ("error", input_file, "No result returned from worker process")
+
+            if status == "ok":
+                completed += 1
+            else:
+                errors.append(f"Failed to translate {os.path.basename(input_file)}: {msg}")
+
+        self.finished_signal.emit(completed, total, errors)
+
+class ExtractionThread(QThread):
+    finished_signal = pyqtSignal(str, str) # status, message
+
+    def __init__(self, video_file, mode, isolate_voice):
+        super().__init__()
+        self.video_file = video_file
+        self.mode = mode
+        self.isolate_voice = isolate_voice
+
+    def run(self):
+        ctx = multiprocessing.get_context('spawn')
+        result_queue = ctx.Queue()
+        p = ctx.Process(target=_run_extract_worker, args=(self.video_file, self.mode, self.isolate_voice, result_queue))
+        p.start()
+        p.join()
+        
+        try:
+            status, msg = result_queue.get_nowait()
+        except Exception:
+            status, msg = ("error", "Process finished without result.")
+        
+        self.finished_signal.emit(status, msg)
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyleSheet("""
+        QLineEdit { placeholder-text-color: #c9c9c9; }
+        QTextEdit { placeholder-text-color: #c9c9c9; }
+    """)
     gui = TranslatorGUI()
-    # gui.resize(700, 600) # Optional: set a default size
     gui.show()
     sys.exit(app.exec())
