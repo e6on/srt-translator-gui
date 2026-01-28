@@ -2,7 +2,7 @@ import sys
 import os
 import json
 import io
-import importlib
+import importlib.metadata
 import tempfile
 import contextlib
 from pathlib import Path
@@ -82,7 +82,6 @@ DEFAULT_SETTINGS = {
 
 # UI Literals
 APP_TITLE = "Gemini SRT Translator v3 GUI"
-FOOTER_TEXT = "Made by e6on & AI, 2025"
 MODEL_NAME_COMBO_WIDTH = 280
 NUMERIC_INPUT_FIXED_WIDTH = 70
 BATCH_LINE_INPUT_FIXED_WIDTH = 70
@@ -477,7 +476,14 @@ class TranslatorGUI(QWidget):
         return button_layout
 
     def _create_footer(self):
-        footer_label = QLabel(FOOTER_TEXT)
+        try:
+            # Dynamically get the version of the translator package
+            gst_version = importlib.metadata.version('gemini-srt-translator')
+        except importlib.metadata.PackageNotFoundError:
+            gst_version = "N/A" # Fallback if not found
+
+        footer_text = f"gemini-srt-translator v{gst_version}  |  GUI by e6on & AI, 2025"
+        footer_label = QLabel(footer_text)
         footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = footer_label.font()
         font.setPointSize(8)
