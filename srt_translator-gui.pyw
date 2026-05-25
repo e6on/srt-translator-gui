@@ -45,6 +45,8 @@ KEY_CONTEXT_FILES_VISIBLE = 'context_files_visible'
 KEY_ISOLATE_VOICE = 'isolate_voice'
 KEY_AUDIO_CHUNK_SIZE = 'audio_chunk_size'
 KEY_THINKING_LEVEL = 'thinking_level'
+KEY_TOKEN_STATS = 'token_stats'
+KEY_PRESERVE_CONTEXT = 'preserve_context'
 
 # Deprecated key for migration
 KEY_INPUT_FILE = 'input_file'
@@ -78,6 +80,8 @@ DEFAULT_SETTINGS = {
     KEY_ISOLATE_VOICE: True,
     KEY_AUDIO_CHUNK_SIZE: '600',
     KEY_THINKING_LEVEL: 'medium',
+    KEY_TOKEN_STATS: False,
+    KEY_PRESERVE_CONTEXT: True,
 }
 
 # UI Literals
@@ -126,7 +130,7 @@ def load_settings() -> Dict[str, Any]:
             # Ensure mutable defaults are copies
             settings[KEY_INPUT_FILES] = list(settings.get(KEY_INPUT_FILES) or [])
             # Enforce types for common boolean fields (in case JSON saved strings)
-            for bool_key in [KEY_THINKING, KEY_SKIP_UPGRADE, KEY_STREAMING, KEY_PROGRESS_LOG, KEY_THOUGHTS_LOG, KEY_USE_COLORS, KEY_FREE_QUOTA, KEY_EXTRACT_AUDIO, KEY_QUIET_MODE, KEY_RESUME, KEY_CONTEXT_FILES_VISIBLE, KEY_ISOLATE_VOICE]:
+            for bool_key in [KEY_THINKING, KEY_SKIP_UPGRADE, KEY_STREAMING, KEY_PROGRESS_LOG, KEY_THOUGHTS_LOG, KEY_USE_COLORS, KEY_FREE_QUOTA, KEY_EXTRACT_AUDIO, KEY_QUIET_MODE, KEY_RESUME, KEY_CONTEXT_FILES_VISIBLE, KEY_ISOLATE_VOICE, KEY_TOKEN_STATS, KEY_PRESERVE_CONTEXT]:
                 if isinstance(settings.get(bool_key), str):
                     settings[bool_key] = settings[bool_key].lower() in ('1', 'true', 'yes', 'on')
             return settings
@@ -237,6 +241,8 @@ class TranslatorGUI(QWidget):
         self.thinking_level_combo = QComboBox()
         self.thinking_level_combo.addItems(["minimal", "low", "medium", "high"])
         self.thinking_level_combo.setFixedWidth(100)
+        self.thinking_level_combo.setToolTip("Only available for Gemini 3 models")
+        self.thinking_level_label.setToolTip("Only available for Gemini 3 models")
         tuning_checkbox1_layout.addWidget(self.thinking_level_label)
         tuning_checkbox1_layout.addWidget(self.thinking_level_combo)
 
@@ -458,6 +464,20 @@ class TranslatorGUI(QWidget):
         self.resume_checkbox = QCheckBox('Auto Resume')
         checkbox4_layout.addWidget(self.resume_checkbox)
         advanced_layout.addLayout(checkbox4_layout)
+
+        checkbox5_layout = QHBoxLayout()
+        checkbox5_layout.setSpacing(5)
+        checkbox5_layout.setContentsMargins(0, 5, 0, 5)
+
+        self.token_stats_checkbox = QCheckBox('Token Stats')
+        self.token_stats_checkbox.setToolTip("Show token usage information after each translation")
+        checkbox5_layout.addWidget(self.token_stats_checkbox)
+
+        self.preserve_context_checkbox = QCheckBox('Preserve Context')
+        self.preserve_context_checkbox.setToolTip("Preserve context between batches")
+        checkbox5_layout.addWidget(self.preserve_context_checkbox)
+        advanced_layout.addLayout(checkbox5_layout)
+
         advanced_group.setLayout(advanced_layout)
         return advanced_group
 
@@ -647,6 +667,8 @@ class TranslatorGUI(QWidget):
             KEY_ISOLATE_VOICE: self.isolate_voice_checkbox.isChecked(),
             KEY_AUDIO_CHUNK_SIZE: self.audio_chunk_size_input.text(),
             KEY_THINKING_LEVEL: self.thinking_level_combo.currentText(),
+            KEY_TOKEN_STATS: self.token_stats_checkbox.isChecked(),
+            KEY_PRESERVE_CONTEXT: self.preserve_context_checkbox.isChecked(),
         }
         try:
             save_settings(current_settings)
@@ -693,6 +715,8 @@ class TranslatorGUI(QWidget):
         thinking_level = self.settings.get(KEY_THINKING_LEVEL, 'medium')
         if self.thinking_level_combo.findText(thinking_level) != -1:
             self.thinking_level_combo.setCurrentText(thinking_level)
+        self.token_stats_checkbox.setChecked(bool(self.settings.get(KEY_TOKEN_STATS, False)))
+        self.preserve_context_checkbox.setChecked(bool(self.settings.get(KEY_PRESERVE_CONTEXT, True)))
         
         self.contextual_input_files_group.setChecked(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
         # Call the toggle method to set visibility and adjust size
@@ -822,6 +846,8 @@ class TranslatorGUI(QWidget):
         gst_params['resume'] = self.resume_checkbox.isChecked()
         gst_params['isolate_voice'] = self.isolate_voice_checkbox.isChecked()
         gst_params['thinking_level'] = self.thinking_level_combo.currentText()
+        gst_params['token_stats'] = self.token_stats_checkbox.isChecked()
+        gst_params['preserve_context'] = self.preserve_context_checkbox.isChecked()
 
         files_to_translate = [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())]
         total_files = len(files_to_translate)
