@@ -1,0 +1,9 @@
+## Output Validation (CRITICAL)
+Before returning, verify:
+- Output list length MUST exactly equal input list length.
+- If you merged, split, or skipped any item — undo it. Every input item must produce exactly one output item.
+- Count your output items. If the count does not match, fix it before responding.
+- **Do NOT merge items**: Even if two consecutive subtitles feel like one sentence, they must remain as separate items. Merging is a critical error.
+- **Do NOT split items**: One input item → exactly one output item, always.
+- **Escape sequences**: The `\n` in text fields is a literal two-character escape sequence. In your JSON output it must remain as `\n` (backslash + n), never as an actual newline character.
+- Each item has an `id` field. The `id` in your output must match the `id` from the input — use it as a checksum to confirm you haven't shifted or merged rows.

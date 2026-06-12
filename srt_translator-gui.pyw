@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit,
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # --- Constants ---
+GUI_VERSION = "3.5.1"
 # Reverted: store settings next to the script (original behavior)
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
@@ -47,6 +48,12 @@ KEY_AUDIO_CHUNK_SIZE = 'audio_chunk_size'
 KEY_THINKING_LEVEL = 'thinking_level'
 KEY_TOKEN_STATS = 'token_stats'
 KEY_PRESERVE_CONTEXT = 'preserve_context'
+KEY_SERVICE_TIER = 'service_tier'
+KEY_USE_ENTERPRISE = 'use_enterprise'
+KEY_CLOUD_PROJECT = 'cloud_project'
+KEY_CLOUD_LOCATION = 'cloud_location'
+KEY_CLOUD_API_KEY = 'cloud_api_key'
+KEY_REQUEST_TYPE = 'request_type'
 
 # Deprecated key for migration
 KEY_INPUT_FILE = 'input_file'
@@ -82,10 +89,16 @@ DEFAULT_SETTINGS = {
     KEY_THINKING_LEVEL: 'medium',
     KEY_TOKEN_STATS: False,
     KEY_PRESERVE_CONTEXT: True,
+    KEY_SERVICE_TIER: '',
+    KEY_USE_ENTERPRISE: False,
+    KEY_CLOUD_PROJECT: '',
+    KEY_CLOUD_LOCATION: 'global',
+    KEY_CLOUD_API_KEY: '',
+    KEY_REQUEST_TYPE: '',
 }
 
 # UI Literals
-APP_TITLE = "Gemini SRT Translator v3.5 GUI"
+APP_TITLE = "Gemini SRT Translator GUI"
 MODEL_NAME_COMBO_WIDTH = 280
 NUMERIC_INPUT_FIXED_WIDTH = 70
 BATCH_LINE_INPUT_FIXED_WIDTH = 70
@@ -130,7 +143,7 @@ def load_settings() -> Dict[str, Any]:
             # Ensure mutable defaults are copies
             settings[KEY_INPUT_FILES] = list(settings.get(KEY_INPUT_FILES) or [])
             # Enforce types for common boolean fields (in case JSON saved strings)
-            for bool_key in [KEY_THINKING, KEY_SKIP_UPGRADE, KEY_STREAMING, KEY_PROGRESS_LOG, KEY_THOUGHTS_LOG, KEY_USE_COLORS, KEY_FREE_QUOTA, KEY_EXTRACT_AUDIO, KEY_QUIET_MODE, KEY_RESUME, KEY_CONTEXT_FILES_VISIBLE, KEY_ISOLATE_VOICE, KEY_TOKEN_STATS, KEY_PRESERVE_CONTEXT]:
+            for bool_key in [KEY_THINKING, KEY_SKIP_UPGRADE, KEY_STREAMING, KEY_PROGRESS_LOG, KEY_THOUGHTS_LOG, KEY_USE_COLORS, KEY_FREE_QUOTA, KEY_EXTRACT_AUDIO, KEY_QUIET_MODE, KEY_RESUME, KEY_CONTEXT_FILES_VISIBLE, KEY_ISOLATE_VOICE, KEY_TOKEN_STATS, KEY_PRESERVE_CONTEXT, KEY_USE_ENTERPRISE]:
                 if isinstance(settings.get(bool_key), str):
                     settings[bool_key] = settings[bool_key].lower() in ('1', 'true', 'yes', 'on')
             return settings
@@ -250,6 +263,20 @@ class TranslatorGUI(QWidget):
         tuning_checkbox1_layout.addStretch(1)
         tuning_checkbox1_layout.addWidget(self.thinking_checkbox)
         translation_layout.addLayout(tuning_checkbox1_layout)
+
+        service_tier_layout = QHBoxLayout()
+        service_tier_layout.setSpacing(5)
+        service_tier_layout.setContentsMargins(0, 5, 0, 5)
+        self.service_tier_label = QLabel('Service Tier:')
+        self.service_tier_combo = QComboBox()
+        self.service_tier_combo.addItems(["", "standard", "flex", "priority"])
+        self.service_tier_combo.setFixedWidth(100)
+        self.service_tier_combo.setToolTip("API request tier (paid plans only): standard, flex, or priority")
+        self.service_tier_label.setToolTip("API request tier (paid plans only): standard, flex, or priority")
+        service_tier_layout.addWidget(self.service_tier_label)
+        service_tier_layout.addWidget(self.service_tier_combo)
+        service_tier_layout.addStretch(1)
+        translation_layout.addLayout(service_tier_layout)
 
         return settings_group
 
@@ -481,6 +508,58 @@ class TranslatorGUI(QWidget):
         advanced_group.setLayout(advanced_layout)
         return advanced_group
 
+    def _create_enterprise_settings_group(self):
+        self.enterprise_group = QGroupBox("Enterprise / Agent Platform Settings")
+        self.enterprise_group.setCheckable(True)
+        self.enterprise_group.setChecked(False)
+        self.enterprise_group.setStyleSheet("QGroupBox::indicator { width: 20px; height: 20px; }")
+
+        self.enterprise_content_widget = QWidget()
+        content_layout = QVBoxLayout(self.enterprise_content_widget)
+        content_layout.setSpacing(5)
+        content_layout.setContentsMargins(10, 5, 10, 5)
+
+        row1_layout = QHBoxLayout()
+        row1_layout.setSpacing(5)
+        row1_layout.setContentsMargins(0, 5, 0, 5)
+        self.cloud_project_label = QLabel('Cloud Project ID:')
+        self.cloud_project_input = QLineEdit()
+        self.cloud_project_input.setPlaceholderText("your-google-cloud-project-id")
+        row1_layout.addWidget(self.cloud_project_label)
+        row1_layout.addWidget(self.cloud_project_input)
+        self.cloud_location_label = QLabel('Location:')
+        self.cloud_location_input = QLineEdit()
+        self.cloud_location_input.setPlaceholderText("global")
+        self.cloud_location_input.setFixedWidth(130)
+        row1_layout.addWidget(self.cloud_location_label)
+        row1_layout.addWidget(self.cloud_location_input)
+        content_layout.addLayout(row1_layout)
+
+        row2_layout = QHBoxLayout()
+        row2_layout.setSpacing(5)
+        row2_layout.setContentsMargins(0, 5, 0, 5)
+        self.cloud_api_key_label = QLabel('Cloud API Key:')
+        self.cloud_api_key_input = QLineEdit()
+        self.cloud_api_key_input.setPlaceholderText("Express mode API key (alternative to Project ID)")
+        row2_layout.addWidget(self.cloud_api_key_label)
+        row2_layout.addWidget(self.cloud_api_key_input)
+        self.request_type_label = QLabel('Request Type:')
+        self.request_type_combo = QComboBox()
+        self.request_type_combo.addItems(["", "shared", "dedicated"])
+        self.request_type_combo.setFixedWidth(100)
+        self.request_type_combo.setToolTip("Resource allocation type: shared (lower cost) or dedicated")
+        row2_layout.addWidget(self.request_type_label)
+        row2_layout.addWidget(self.request_type_combo)
+        content_layout.addLayout(row2_layout)
+
+        group_layout = QVBoxLayout()
+        group_layout.setContentsMargins(0, 0, 0, 0)
+        group_layout.addWidget(self.enterprise_content_widget)
+        self.enterprise_group.setLayout(group_layout)
+
+        self.enterprise_group.toggled.connect(lambda checked: self.enterprise_content_widget.setVisible(checked))
+        return self.enterprise_group
+
     def _create_action_buttons_layout(self):
         self.save_button = QPushButton('Save')
         self.save_button.clicked.connect(self.saveSettings)
@@ -502,7 +581,7 @@ class TranslatorGUI(QWidget):
         except importlib.metadata.PackageNotFoundError:
             gst_version = "N/A" # Fallback if not found
 
-        footer_text = f"gemini-srt-translator v{gst_version}  |  GUI by e6on & AI, 2025"
+        footer_text = f"gemini-srt-translator v{gst_version}  |  GUI v{GUI_VERSION} by e6on & AI, 2025"
         footer_label = QLabel(footer_text)
         footer_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         font = footer_label.font()
@@ -553,6 +632,7 @@ class TranslatorGUI(QWidget):
         settings_columns_layout.addLayout(settings_left_layout)
         settings_columns_layout.addLayout(settings_right_layout)
         settings_layout.addLayout(settings_columns_layout)
+        settings_layout.addWidget(self._create_enterprise_settings_group())
 
         # --- Add tabs to widget ---
         tab_widget.addTab(translation_tab, "Translation")
@@ -669,6 +749,12 @@ class TranslatorGUI(QWidget):
             KEY_THINKING_LEVEL: self.thinking_level_combo.currentText(),
             KEY_TOKEN_STATS: self.token_stats_checkbox.isChecked(),
             KEY_PRESERVE_CONTEXT: self.preserve_context_checkbox.isChecked(),
+            KEY_SERVICE_TIER: self.service_tier_combo.currentText(),
+            KEY_USE_ENTERPRISE: self.enterprise_group.isChecked(),
+            KEY_CLOUD_PROJECT: self.cloud_project_input.text(),
+            KEY_CLOUD_LOCATION: self.cloud_location_input.text(),
+            KEY_CLOUD_API_KEY: self.cloud_api_key_input.text(),
+            KEY_REQUEST_TYPE: self.request_type_combo.currentText(),
         }
         try:
             save_settings(current_settings)
@@ -717,7 +803,25 @@ class TranslatorGUI(QWidget):
             self.thinking_level_combo.setCurrentText(thinking_level)
         self.token_stats_checkbox.setChecked(bool(self.settings.get(KEY_TOKEN_STATS, False)))
         self.preserve_context_checkbox.setChecked(bool(self.settings.get(KEY_PRESERVE_CONTEXT, True)))
-        
+
+        service_tier = self.settings.get(KEY_SERVICE_TIER, '')
+        if self.service_tier_combo.findText(service_tier) != -1:
+            self.service_tier_combo.setCurrentText(service_tier)
+        else:
+            self.service_tier_combo.setCurrentIndex(0)
+
+        use_enterprise = bool(self.settings.get(KEY_USE_ENTERPRISE, False))
+        self.enterprise_group.setChecked(use_enterprise)
+        self.enterprise_content_widget.setVisible(use_enterprise)
+        self.cloud_project_input.setText(self.settings.get(KEY_CLOUD_PROJECT, ''))
+        self.cloud_location_input.setText(self.settings.get(KEY_CLOUD_LOCATION, 'global'))
+        self.cloud_api_key_input.setText(self.settings.get(KEY_CLOUD_API_KEY, ''))
+        request_type = self.settings.get(KEY_REQUEST_TYPE, '')
+        if self.request_type_combo.findText(request_type) != -1:
+            self.request_type_combo.setCurrentText(request_type)
+        else:
+            self.request_type_combo.setCurrentIndex(0)
+
         self.contextual_input_files_group.setChecked(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
         # Call the toggle method to set visibility and adjust size
         self._toggle_contextual_group_and_resize(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
@@ -848,6 +952,21 @@ class TranslatorGUI(QWidget):
         gst_params['thinking_level'] = self.thinking_level_combo.currentText()
         gst_params['token_stats'] = self.token_stats_checkbox.isChecked()
         gst_params['preserve_context'] = self.preserve_context_checkbox.isChecked()
+        service_tier = self.service_tier_combo.currentText()
+        if service_tier:
+            gst_params['service_tier'] = service_tier
+
+        if self.enterprise_group.isChecked():
+            gst_params['use_enterprise'] = True
+            if self.cloud_project_input.text():
+                gst_params['cloud_project'] = self.cloud_project_input.text()
+            cloud_location = self.cloud_location_input.text()
+            gst_params['cloud_location'] = cloud_location if cloud_location else 'global'
+            if self.cloud_api_key_input.text():
+                gst_params['cloud_api_key'] = self.cloud_api_key_input.text()
+            request_type = self.request_type_combo.currentText()
+            if request_type:
+                gst_params['request_type'] = request_type
 
         files_to_translate = [self.file_list_widget.item(i).text() for i in range(self.file_list_widget.count())]
         total_files = len(files_to_translate)
