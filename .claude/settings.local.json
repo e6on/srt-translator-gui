@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import importlib.metadata; print\\(importlib.metadata.version\\('gemini-srt-translator'\\)\\)\")"
+    ]
+  }
+}

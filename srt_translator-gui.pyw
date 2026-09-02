@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit,
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # --- Constants ---
-GUI_VERSION = "3.5.1"
+GUI_VERSION = "3.8"
 # Reverted: store settings next to the script (original behavior)
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
@@ -54,6 +54,11 @@ KEY_CLOUD_PROJECT = 'cloud_project'
 KEY_CLOUD_LOCATION = 'cloud_location'
 KEY_CLOUD_API_KEY = 'cloud_api_key'
 KEY_REQUEST_TYPE = 'request_type'
+KEY_CONTEXT_SIZE = 'context_size'
+KEY_BATCH_SIZE_ERROR_STEP = 'batch_size_error_step'
+KEY_AUDIO_CHUNK_ERROR_STEP = 'audio_chunk_error_step'
+KEY_TOKEN_REPORT = 'token_report'
+KEY_OUTPUT_FILE = 'output_file'
 
 # Deprecated key for migration
 KEY_INPUT_FILE = 'input_file'
@@ -95,6 +100,11 @@ DEFAULT_SETTINGS = {
     KEY_CLOUD_LOCATION: 'global',
     KEY_CLOUD_API_KEY: '',
     KEY_REQUEST_TYPE: '',
+    KEY_CONTEXT_SIZE: '50',
+    KEY_BATCH_SIZE_ERROR_STEP: '100',
+    KEY_AUDIO_CHUNK_ERROR_STEP: '60',
+    KEY_TOKEN_REPORT: '',
+    KEY_OUTPUT_FILE: '',
 }
 
 # UI Literals
@@ -445,6 +455,48 @@ class TranslatorGUI(QWidget):
         
         advanced_layout.addLayout(lines_input_layout)
         
+        error_step_layout = QHBoxLayout()
+        error_step_layout.setSpacing(5)
+        error_step_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.batch_size_error_step_label = QLabel('Batch Error Step:')
+        self.batch_size_error_step_input = QLineEdit()
+        self.batch_size_error_step_input.setFixedWidth(BATCH_LINE_INPUT_FIXED_WIDTH)
+        self.batch_size_error_step_input.setPlaceholderText("100")
+        self.batch_size_error_step_input.setToolTip("Lines reduction per consecutive error")
+        error_step_layout.addWidget(self.batch_size_error_step_label)
+        error_step_layout.addWidget(self.batch_size_error_step_input)
+
+        self.audio_chunk_error_step_label = QLabel('Audio Error Step (s):')
+        self.audio_chunk_error_step_input = QLineEdit()
+        self.audio_chunk_error_step_input.setFixedWidth(BATCH_LINE_INPUT_FIXED_WIDTH)
+        self.audio_chunk_error_step_input.setPlaceholderText("60")
+        self.audio_chunk_error_step_input.setToolTip("Seconds reduction per consecutive error")
+        error_step_layout.addWidget(self.audio_chunk_error_step_label)
+        error_step_layout.addWidget(self.audio_chunk_error_step_input)
+        
+        advanced_layout.addLayout(error_step_layout)
+        
+        context_layout = QHBoxLayout()
+        context_layout.setSpacing(5)
+        context_layout.setContentsMargins(0, 5, 0, 5)
+        
+        self.context_size_label = QLabel('Context Size:')
+        self.context_size_input = QLineEdit()
+        self.context_size_input.setFixedWidth(BATCH_LINE_INPUT_FIXED_WIDTH)
+        self.context_size_input.setPlaceholderText("50")
+        self.context_size_input.setToolTip("Number of previous subtitle lines as context (0 disables)")
+        context_layout.addWidget(self.context_size_label)
+        context_layout.addWidget(self.context_size_input)
+
+        self.token_report_label = QLabel('Token Report File:')
+        self.token_report_input = QLineEdit()
+        self.token_report_input.setPlaceholderText("token_report.json (leave blank to auto-generate)")
+        context_layout.addWidget(self.token_report_label)
+        context_layout.addWidget(self.token_report_input)
+        
+        advanced_layout.addLayout(context_layout)
+        
         checkbox1_layout = QHBoxLayout()
         checkbox1_layout.setSpacing(5)
         checkbox1_layout.setContentsMargins(0, 5, 0, 5)
@@ -755,6 +807,10 @@ class TranslatorGUI(QWidget):
             KEY_CLOUD_LOCATION: self.cloud_location_input.text(),
             KEY_CLOUD_API_KEY: self.cloud_api_key_input.text(),
             KEY_REQUEST_TYPE: self.request_type_combo.currentText(),
+            KEY_BATCH_SIZE_ERROR_STEP: self.batch_size_error_step_input.text(),
+            KEY_AUDIO_CHUNK_ERROR_STEP: self.audio_chunk_error_step_input.text(),
+            KEY_CONTEXT_SIZE: self.context_size_input.text(),
+            KEY_TOKEN_REPORT: self.token_report_input.text(),
         }
         try:
             save_settings(current_settings)
@@ -797,6 +853,11 @@ class TranslatorGUI(QWidget):
         self.resume_checkbox.setChecked(bool(self.settings.get(KEY_RESUME, True)))
         self.isolate_voice_checkbox.setChecked(bool(self.settings.get(KEY_ISOLATE_VOICE, True)))
         self.audio_chunk_size_input.setText(self.settings.get(KEY_AUDIO_CHUNK_SIZE, '600'))
+        
+        self.batch_size_error_step_input.setText(self.settings.get(KEY_BATCH_SIZE_ERROR_STEP, '100'))
+        self.audio_chunk_error_step_input.setText(self.settings.get(KEY_AUDIO_CHUNK_ERROR_STEP, '60'))
+        self.context_size_input.setText(self.settings.get(KEY_CONTEXT_SIZE, '50'))
+        self.token_report_input.setText(self.settings.get(KEY_TOKEN_REPORT, ''))
 
         thinking_level = self.settings.get(KEY_THINKING_LEVEL, 'medium')
         if self.thinking_level_combo.findText(thinking_level) != -1:
@@ -946,12 +1007,54 @@ class TranslatorGUI(QWidget):
         gst_params['video_file'] = self.video_file_display.text()
         gst_params['audio_file'] = self.audio_file_display.text()
         gst_params['extract_audio'] = self.extract_audio_checkbox.isChecked()
-        gst_params['quiet_mode'] = self.quiet_mode_checkbox.isChecked()
+        gst_params['quiet'] = self.quiet_mode_checkbox.isChecked()  # Map quiet_mode to quiet for gst
         gst_params['resume'] = self.resume_checkbox.isChecked()
         gst_params['isolate_voice'] = self.isolate_voice_checkbox.isChecked()
         gst_params['thinking_level'] = self.thinking_level_combo.currentText()
         gst_params['token_stats'] = self.token_stats_checkbox.isChecked()
         gst_params['preserve_context'] = self.preserve_context_checkbox.isChecked()
+        
+        # Validate and add new error step parameters
+        batch_size_error_step_text = self.batch_size_error_step_input.text()
+        if batch_size_error_step_text:
+            try:
+                value = int(batch_size_error_step_text)
+                if value < 0:
+                    QMessageBox.warning(self, "Input Error", f"Batch Size Error Step must be >= 0. You entered: '{value}'")
+                    return
+                gst_params['batch_size_error_step'] = value
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Batch Size Error Step must be a valid integer. You entered: '{batch_size_error_step_text}'")
+                return
+        
+        audio_chunk_error_step_text = self.audio_chunk_error_step_input.text()
+        if audio_chunk_error_step_text:
+            try:
+                value = int(audio_chunk_error_step_text)
+                if value < 0:
+                    QMessageBox.warning(self, "Input Error", f"Audio Chunk Error Step must be >= 0. You entered: '{value}'")
+                    return
+                gst_params['audio_chunk_error_step'] = value
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Audio Chunk Error Step must be a valid integer. You entered: '{audio_chunk_error_step_text}'")
+                return
+        
+        context_size_text = self.context_size_input.text()
+        if context_size_text:
+            try:
+                value = int(context_size_text)
+                if value < 0:
+                    QMessageBox.warning(self, "Input Error", f"Context Size must be >= 0. You entered: '{value}'")
+                    return
+                gst_params['context_size'] = value
+            except ValueError:
+                QMessageBox.warning(self, "Invalid Input", f"Context Size must be a valid integer. You entered: '{context_size_text}'")
+                return
+        
+        token_report = self.token_report_input.text()
+        if token_report:
+            gst_params['token_report'] = token_report
+        
         service_tier = self.service_tier_combo.currentText()
         if service_tier:
             gst_params['service_tier'] = service_tier
