@@ -5,6 +5,9 @@ import io
 import importlib.metadata
 import tempfile
 import contextlib
+import re
+import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Dict, Any
 import multiprocessing
@@ -13,7 +16,7 @@ from PyQt6.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QTextEdit,
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 
 # --- Constants ---
-GUI_VERSION = "3.8"
+GUI_VERSION = "3.8.1"
 # Reverted: store settings next to the script (original behavior)
 SETTINGS_FILE = Path(__file__).resolve().parent / "settings.json"
 
@@ -59,6 +62,8 @@ KEY_BATCH_SIZE_ERROR_STEP = 'batch_size_error_step'
 KEY_AUDIO_CHUNK_ERROR_STEP = 'audio_chunk_error_step'
 KEY_TOKEN_REPORT = 'token_report'
 KEY_OUTPUT_FILE = 'output_file'
+KEY_PROVIDER = 'provider'
+KEY_OLLAMA_URL = 'ollama_url'
 
 # Deprecated key for migration
 KEY_INPUT_FILE = 'input_file'
@@ -105,6 +110,8 @@ DEFAULT_SETTINGS = {
     KEY_AUDIO_CHUNK_ERROR_STEP: '60',
     KEY_TOKEN_REPORT: '',
     KEY_OUTPUT_FILE: '',
+    KEY_PROVIDER: 'Gemini',
+    KEY_OLLAMA_URL: 'http://localhost:11434',
 }
 
 # UI Literals
@@ -201,11 +208,35 @@ class TranslatorGUI(QWidget):
         language_layout.addWidget(self.target_language_combo)
         translation_layout.addLayout(language_layout)
 
+        self.provider_label = QLabel('Provider:')
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Gemini", "Ollama (Local)"])
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        provider_layout = QHBoxLayout()
+        provider_layout.setSpacing(5)
+        provider_layout.setContentsMargins(0, 0, 0, 0)
+        provider_layout.addWidget(self.provider_label)
+        provider_layout.addWidget(self.provider_combo)
+        provider_layout.addStretch(1)
+        translation_layout.addLayout(provider_layout)
+
+        self.ollama_url_label = QLabel('Ollama URL:')
+        self.ollama_url_input = QLineEdit()
+        self.ollama_url_input.setText('http://localhost:11434')
+        self.ollama_url_input.setPlaceholderText('http://localhost:11434')
+        ollama_layout = QHBoxLayout()
+        ollama_layout.setSpacing(5)
+        ollama_layout.setContentsMargins(0, 0, 0, 0)
+        ollama_layout.addWidget(self.ollama_url_label)
+        ollama_layout.addWidget(self.ollama_url_input)
+        translation_layout.addLayout(ollama_layout)
+
         self.model_name_label = QLabel('Model:')
         model_layout = QHBoxLayout()
         model_layout.setSpacing(5)
         model_layout.setContentsMargins(0, 5, 0, 5)
         self.model_name_combo = QComboBox()
+        self.model_name_combo.setEditable(True)
         self.model_name_combo.setFixedWidth(MODEL_NAME_COMBO_WIDTH)
         self.populate_models_button = QPushButton('List Models')
         self.populate_models_button.clicked.connect(self.populateModels)
@@ -410,6 +441,22 @@ class TranslatorGUI(QWidget):
                 self.adjustSize() # Resize to preferred sizeHint
 
         QTimer.singleShot(0, do_resize_logic)
+
+    def _on_provider_changed(self, provider):
+        is_ollama = provider == "Ollama (Local)"
+        if not hasattr(self, "api_key_input"):
+            return
+        self.api_key_label.setVisible(not is_ollama)
+        self.api_key_input.setVisible(not is_ollama)
+        self.api_key2_label.setVisible(not is_ollama)
+        self.api_key2_input.setVisible(not is_ollama)
+        self.ollama_url_label.setVisible(is_ollama)
+        self.ollama_url_input.setVisible(is_ollama)
+        self.populate_models_button.setText("List Models")
+        if is_ollama:
+            self.thinking_level_label.setToolTip("Ollama local model: thinking is controlled by the model; existing checkbox is passed as the Ollama 'think' option when supported.")
+        else:
+            self.thinking_level_label.setToolTip("Only available for Gemini 3 models")
 
     def _create_api_key_group(self):
         api_key_group = QGroupBox("API Key Management")
@@ -728,6 +775,38 @@ class TranslatorGUI(QWidget):
             self.audio_file_display.setText(file_name)
 
     def populateModels(self):
+        if self.provider_combo.currentText() == "Ollama (Local)":
+            base_url = self.ollama_url_input.text().strip().rstrip("/")
+            if not base_url:
+                QMessageBox.warning(self, "Ollama URL Missing", "Please enter the Ollama server URL.")
+                return
+            try:
+                req = urllib.request.Request(
+                    f"{base_url}/api/tags",
+                    headers={"Accept": "application/json"},
+                    method="GET",
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                if not models:
+                    QMessageBox.warning(self, "No Ollama Models", "No models were returned by Ollama. Make sure a model is installed with 'ollama pull <model>'.")
+                    return
+                self.model_name_combo.clear()
+                self.model_name_combo.addItems(models)
+                desired_model = self.settings.get(KEY_MODEL_NAME, "")
+                if desired_model in models:
+                    self.model_name_combo.setCurrentText(desired_model)
+                else:
+                    self.model_name_combo.setCurrentIndex(0)
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Ollama Connection Error",
+                    f"Could not connect to Ollama at:\n{base_url}\n\n{e}\n\n"
+                    "Make sure Ollama is running and reachable from this computer."
+                )
+            return
+
         if not self.api_key_input.text():
             QMessageBox.warning(self, "API Key Missing", "Please enter the Gemini API Key to list models.")
             return
@@ -755,17 +834,14 @@ class TranslatorGUI(QWidget):
         if models:
             self.model_name_combo.clear()
             self.model_name_combo.addItems(models)
-            # Try to set the previously selected/default model
             desired_model = self.settings.get(KEY_MODEL_NAME, DEFAULT_SETTINGS[KEY_MODEL_NAME])
             if desired_model in models:
                 self.model_name_combo.setCurrentText(desired_model)
-            else:
-                # preserve saved model by adding it if not present
-                if desired_model:
-                    self.model_name_combo.insertItem(0, desired_model)
-                    self.model_name_combo.setCurrentIndex(0)
-                elif self.model_name_combo.count() > 0:
-                    self.model_name_combo.setCurrentIndex(0)
+            elif desired_model:
+                self.model_name_combo.insertItem(0, desired_model)
+                self.model_name_combo.setCurrentIndex(0)
+            elif self.model_name_combo.count() > 0:
+                self.model_name_combo.setCurrentIndex(0)
         else:
             QMessageBox.warning(self, "No Models Found", "Failed to retrieve models or no models available. Check API key and network.")
 
@@ -811,6 +887,8 @@ class TranslatorGUI(QWidget):
             KEY_AUDIO_CHUNK_ERROR_STEP: self.audio_chunk_error_step_input.text(),
             KEY_CONTEXT_SIZE: self.context_size_input.text(),
             KEY_TOKEN_REPORT: self.token_report_input.text(),
+            KEY_PROVIDER: self.provider_combo.currentText(),
+            KEY_OLLAMA_URL: self.ollama_url_input.text(),
         }
         try:
             save_settings(current_settings)
@@ -820,6 +898,11 @@ class TranslatorGUI(QWidget):
             QMessageBox.critical(self, "Save Error", f"Failed to save settings: {e}")
 
     def populate_ui_from_settings(self):
+        provider = self.settings.get(KEY_PROVIDER, DEFAULT_SETTINGS[KEY_PROVIDER])
+        if self.provider_combo.findText(provider) != -1:
+            self.provider_combo.setCurrentText(provider)
+        self.ollama_url_input.setText(self.settings.get(KEY_OLLAMA_URL, DEFAULT_SETTINGS[KEY_OLLAMA_URL]))
+
         self.api_key_input.setText(self.settings.get(KEY_API_KEY, ''))
         self.api_key2_input.setText(self.settings.get(KEY_API_KEY2, ''))
         self.description_input.setPlainText(self.settings.get(KEY_DESCRIPTION, ''))
@@ -832,6 +915,7 @@ class TranslatorGUI(QWidget):
         elif self.target_language_combo.count() > 0: # Fallback to first item if saved one not found
             self.target_language_combo.setCurrentIndex(0)
 
+        self.model_name_combo.setEditText(self.settings.get(KEY_MODEL_NAME, DEFAULT_SETTINGS[KEY_MODEL_NAME]))
         self.start_line_input.setText(self.settings.get(KEY_START_LINE, '1'))
         self.temperature_input.setText(self.settings.get(KEY_TEMPERATURE, '0.7'))
         self.top_p_input.setText(self.settings.get(KEY_TOP_P, '0.95'))
@@ -887,19 +971,23 @@ class TranslatorGUI(QWidget):
         # Call the toggle method to set visibility and adjust size
         self._toggle_contextual_group_and_resize(bool(self.settings.get(KEY_CONTEXT_FILES_VISIBLE, False)))
 
-        # Automatically populate models on startup if API key is present
-        if self.api_key_input.text():
+        # Automatically populate models on startup
+        if self.provider_combo.currentText() == "Ollama (Local)":
             self.populateModels()
+        elif self.api_key_input.text():
+            self.populateModels()
+        self._on_provider_changed(self.provider_combo.currentText())
 
     def runTranslation(self):
         # --- Validation of required fields ---
         required_fields_map = {
-            self.api_key_input: "Gemini API Key",
             self.batch_size_input: "Batch Size",
         }
-        for widget, name in required_fields_map.items():
-            if not widget.text().strip():
-                QMessageBox.warning(self, "Input Error", f"{name} is required.")
+        if self.provider_combo.currentText() != "Ollama (Local)":
+            required_fields_map[self.api_key_input] = "Gemini API Key"
+        else:
+            if not self.ollama_url_input.text().strip():
+                QMessageBox.warning(self, "Input Error", "Ollama URL is required.")
                 return
 
         if self.file_list_widget.count() == 0:
@@ -908,8 +996,8 @@ class TranslatorGUI(QWidget):
         if not self.target_language_combo.currentText():
             QMessageBox.warning(self, "Input Error", "Target Language must be selected.")
             return
-        if not self.model_name_combo.currentText(): # Model might not be in list if not populated yet
-            QMessageBox.warning(self, "Input Error", "Model Name must be selected. Try 'List Models' first.")
+        if not self.model_name_combo.currentText().strip():
+            QMessageBox.warning(self, "Input Error", "Model Name must be selected.")
             return
         # --- End Validation ---
 
@@ -919,7 +1007,9 @@ class TranslatorGUI(QWidget):
             'gemini_api_key2': self.api_key2_input.text(),
             'target_language': self.target_language_combo.currentText(),
             'description': self.description_input.toPlainText(),
-            'model_name': self.model_name_combo.currentText(),
+            'model_name': self.model_name_combo.currentText().strip(),
+            'provider': self.provider_combo.currentText(),
+            'ollama_url': self.ollama_url_input.text().strip().rstrip('/'),
         }
 
         # Numeric parsing with validation (keeping original behavior)
@@ -1181,17 +1271,351 @@ class FileListWidget(QListWidget):
         else:
             event.ignore()
 
-# New helper: run a single translation in a separate process
+# Translation worker helpers
+
+def _extract_json_array(text: str):
+    """Extract a JSON array from an Ollama response."""
+    if not text:
+        raise ValueError("Ollama returned an empty response.")
+    text = text.strip()
+    # Strip common markdown fences.
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    # Prefer the first complete JSON array.
+    decoder = json.JSONDecoder()
+    start = text.find("[")
+    if start < 0:
+        raise ValueError("Ollama response did not contain a JSON array.")
+    try:
+        value, _ = decoder.raw_decode(text[start:])
+    except json.JSONDecodeError as e:
+        # SubtitleSession's commit_batch can repair JSON, so return the raw
+        # response as a fallback.
+        return text
+    if not isinstance(value, list):
+        raise ValueError("Ollama response JSON is not an array.")
+    return value
+
+
+def _ollama_translate_batch(batch_payload: dict, model: str, base_url: str,
+                            temperature=None, top_p=None, top_k=None, thinking=False):
+    """Translate one SubtitleSession batch through a local Ollama server."""
+    system_prompt = batch_payload.get("system_prompt", "")
+    context = batch_payload.get("context") or []
+    batch = batch_payload.get("batch") or []
+
+    user_prompt = (
+        "Translate the subtitle dialogue in the BATCH to the requested target language. "
+        "Use the CONTEXT only to understand continuity, names, tone and references. "
+        "Do not translate or modify timestamps because only subtitle text is supplied. "
+        "Return ONLY a JSON array. Every input item must have exactly one corresponding "
+        "output item with the same index. Use this format: "
+        '[{"index":"0","text":"translated text"}]. '
+        "Do not add explanations, markdown fences, comments, or extra keys.\n\n"
+        "CONTEXT:\n" + json.dumps(context, ensure_ascii=False) +
+        "\n\nBATCH:\n" + json.dumps(batch, ensure_ascii=False)
+    )
+
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "options": {},
+    }
+    options = payload["options"]
+    if temperature is not None:
+        options["temperature"] = temperature
+    if top_p is not None:
+        options["top_p"] = top_p
+    if top_k is not None:
+        options["top_k"] = top_k
+    # Ollama supports 'think' on models that implement thinking (e.g. Qwen3).
+    options["think"] = bool(thinking)
+
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/chat",
+        data=body,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Ollama HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Could not connect to Ollama: {e.reason}") from e
+
+    message = data.get("message") or {}
+    content = message.get("content", "")
+    if not content and data.get("response"):
+        content = data["response"]
+    return _extract_json_array(content)
+
+
 def _run_translate_worker(params: dict, input_file: str, output_file: str, result_queue: multiprocessing.Queue):
     """
-    Worker function executed in a separate process. It imports the gemini_srt_translator
-    module, applies params, runs translate() and reports status via result_queue.
+    Worker executed in a separate process. Uses the normal GST translate()
+    pipeline for Gemini, or SubtitleSession for an Ollama local model.
     """
     try:
+        provider = params.get("provider", "Gemini")
+        if provider == "Ollama (Local)":
+            from gemini_srt_translator import SubtitleSession
+
+            session_kwargs = {
+                "input_file": input_file,
+                "target_language": params["target_language"],
+                "output_file": output_file,
+                "video_file": params.get("video_file") or None,
+                "audio_file": params.get("audio_file") or None,
+                "batch_size": params.get("batch_size", 100),
+                "start_line": params.get("start_line") or None,
+                "resume_context_size": params.get("context_size", 50),
+                "description": params.get("description") or None,
+                "audio_chunk_size": params.get("audio_chunk_size", 300),
+                "extract_audio": params.get("extract_audio", False),
+                "isolate_voice": params.get("isolate_voice", True),
+                "resume": params.get("resume", True),
+                "thinking": params.get("thinking", False),
+            }
+            # Keep compatibility with different gemini-srt-translator versions.
+            # Newer releases accept resume_context_size, while older releases do not.
+            # Filter kwargs against the installed SubtitleSession signature instead
+            # of assuming a particular library version.
+            import inspect
+            session_kwargs = {k: v for k, v in session_kwargs.items() if v is not None}
+            try:
+                supported = inspect.signature(SubtitleSession.__init__).parameters
+                session_kwargs = {k: v for k, v in session_kwargs.items() if k in supported}
+            except (TypeError, ValueError):
+                # Fall back to the smallest common parameter set if introspection
+                # is unavailable.
+                for key in ("resume_context_size", "thinking", "isolate_voice",
+                            "audio_chunk_size", "extract_audio", "audio_file",
+                            "video_file", "start_line", "description"):
+                    session_kwargs.pop(key, None)
+
+            session = SubtitleSession(**session_kwargs)
+            try:
+                result_queue.put(("debug", input_file, f"SubtitleSession created; kwargs batch_size={session_kwargs.get('batch_size')}"))
+            except Exception:
+                pass
+            batch_counter = 0
+            cumulative_items = 0
+
+            # Attempt to estimate total subtitle items by counting timestamp
+            # lines in the input SRT. This is a best-effort estimate for
+            # rendering a console progress bar.
+            total_items = None
+            try:
+                ts_re = re.compile(r"\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}")
+                with open(input_file, 'r', encoding='utf-8', errors='ignore') as inf:
+                    total_items = sum(1 for ln in inf if ts_re.search(ln))
+            except Exception:
+                total_items = None
+
+            # Send a start message so the parent can initialise a progress bar.
+            try:
+                model_name = params.get("model_name") or "local-model"
+                result_queue.put(("start", input_file, total_items, model_name))
+            except Exception:
+                pass
+            while not session.is_complete():
+                batch_payload = session.get_next_batch()
+                if not batch_payload:
+                    break
+                # Try a single translation call first. If the model returns a
+                # mismatched number of items, attempt recursive splitting of the
+                # batch into smaller halves until each sub-call returns the
+                # expected count or we exhaust the recursion depth.
+                def _translate_with_split(payload, depth=6):
+                    batch = payload.get("batch") or []
+                    expected = len(batch)
+                    if expected == 0:
+                        return []
+
+                    try:
+                        result_queue.put(("debug", input_file, f"Calling _ollama_translate_batch for payload size {len(payload.get('batch') or [])}, depth={depth}"))
+                    except Exception:
+                        pass
+                    translated = _ollama_translate_batch(
+                        payload,
+                        model=params["model_name"],
+                        base_url=params["ollama_url"],
+                        temperature=params.get("temperature"),
+                        top_p=params.get("top_p"),
+                        top_k=params.get("top_k"),
+                        thinking=params.get("thinking", False),
+                    )
+                    try:
+                        if isinstance(translated, list):
+                            result_queue.put(("debug", input_file, f"returned list len={len(translated)}"))
+                        else:
+                            result_queue.put(("debug", input_file, "returned non-list"))
+                    except Exception:
+                        pass
+
+                    # If the response is the exact expected list, emit a
+                    # partial progress update (these items are ready) and
+                    # return them to the caller so they can be combined or
+                    # committed by the caller.
+                    if isinstance(translated, list) and len(translated) == expected:
+                        try:
+                            result_queue.put(("partial", input_file, expected))
+                        except Exception:
+                            pass
+                        return translated
+
+                    # If we've reached max depth or batch of 1, fail early.
+                    if depth <= 0 or expected <= 1:
+                        received = len(translated) if isinstance(translated, list) else 0
+                        raise RuntimeError(
+                            f"Failed to commit batch {batch_payload.get('batch_number')}: Item count mismatch: expected {expected} items, but received {received} items."
+                        )
+
+                    # Otherwise, split the batch into two halves and translate each.
+                    mid = expected // 2
+                    try:
+                        # Inform parent that we're reducing the batch size.
+                        result_queue.put(("reason", input_file, f"reduced to {mid}"))
+                    except Exception:
+                        pass
+                    left_payload = {
+                        "system_prompt": payload.get("system_prompt", ""),
+                        "context": payload.get("context", []),
+                        "batch": batch[:mid],
+                    }
+                    right_payload = {
+                        "system_prompt": payload.get("system_prompt", ""),
+                        "context": payload.get("context", []),
+                        "batch": batch[mid:],
+                    }
+
+                    left_translated = _translate_with_split(left_payload, depth - 1)
+                    right_translated = _translate_with_split(right_payload, depth - 1)
+                    combined = []
+                    combined.extend(left_translated)
+                    combined.extend(right_translated)
+
+                    if len(combined) != expected:
+                        raise RuntimeError(
+                            f"Failed to commit batch {batch_payload.get('batch_number')}: Item count mismatch after chunked retries: expected {expected} items, but assembled {len(combined)} items."
+                        )
+                    return combined
+
+                # Adaptive chunking: process the returned batch in chunks of
+                # `preferred_size` which may be reduced on failures and
+                # restored after two consecutive successful chunks.
+                batch = batch_payload.get('batch') or []
+                preferred_size = params.get('batch_size', 100)
+                preferred_stack = []
+                consecutive_successes = 0
+
+                collected = []
+                i = 0
+                # Process the batch range [i:len(batch))
+                while i < len(batch):
+                    # Build current chunk according to preferred_size
+                    cur_size = min(preferred_size, len(batch) - i)
+                    cur_chunk = batch[i:i+cur_size]
+                    chunk_payload = {
+                        "system_prompt": batch_payload.get("system_prompt", ""),
+                        "context": batch_payload.get("context", []),
+                        "batch": cur_chunk,
+                    }
+                    try:
+                        chunk_translated = _translate_with_split(chunk_payload)
+                    except Exception as e:
+                        # On failure, reduce preferred size (but not below 1),
+                        # notify parent, reset success counter and retry from
+                        # the same index with smaller chunks.
+                        new_size = max(1, preferred_size // 2)
+                        if new_size == preferred_size:
+                            # cannot reduce further -> propagate error
+                            raise
+                        preferred_stack.append(preferred_size)
+                        preferred_size = new_size
+                        consecutive_successes = 0
+                        try:
+                            result_queue.put(("reason", input_file, f"reduced to {preferred_size}"))
+                        except Exception:
+                            pass
+                        # continue without advancing i so the same region is retried
+                        continue
+
+                    # Append results and advance
+                    collected.extend(chunk_translated if isinstance(chunk_translated, list) else [])
+
+                    # Success bookkeeping: if the chunk returned the full expected
+                    # number of items, count it as a success for this preferred size.
+                    if isinstance(chunk_translated, list) and len(chunk_translated) == len(cur_chunk):
+                        if preferred_stack and preferred_size < preferred_stack[-1]:
+                            consecutive_successes += 1
+                            # Restore to the last reduced size only after two consecutive successes
+                            if consecutive_successes >= 2:
+                                try:
+                                    restore_size = preferred_stack.pop()
+                                except Exception:
+                                    restore_size = preferred_size * 2
+                                try:
+                                    result_queue.put(("reason", input_file, f"restored to {restore_size}"))
+                                except Exception:
+                                    pass
+                                preferred_size = restore_size
+                                consecutive_successes = 0
+                        else:
+                            # Not in reduced state, keep counters reset
+                            consecutive_successes = 0
+                    else:
+                        # Partial/non-matching result counts as a failure; reduce
+                        preferred_stack.append(preferred_size)
+                        preferred_size = max(1, preferred_size // 2)
+                        consecutive_successes = 0
+                        try:
+                            result_queue.put(("reason", input_file, f"reduced to {preferred_size}"))
+                        except Exception:
+                            pass
+                        # Do not advance i; retry this region with smaller chunks
+                        continue
+
+                    i += cur_size
+
+                # After processing all chunks, reassemble and commit
+                translated = collected
+
+                result = session.commit_batch(translated)
+                batch_counter += 1
+                # Update cumulative items by the number of translated items
+                # we just committed. Fall back to batch length when unclear.
+                try:
+                    committed_count = len(translated) if isinstance(translated, list) else len(batch_payload.get('batch') or [])
+                except Exception:
+                    committed_count = len(batch_payload.get('batch') or [])
+                cumulative_items += committed_count
+                # Emit progress back to the parent process so the GUI can update.
+                try:
+                    result_queue.put(("progress", input_file, batch_counter, cumulative_items))
+                except Exception:
+                    pass
+                if not result.get("success"):
+                    raise RuntimeError(
+                        f"Failed to commit batch {batch_payload.get('batch_number')}: "
+                        f"{result.get('error', 'unknown error')}"
+                    )
+
+            result_queue.put(("ok", input_file, ""))
+            return
+
         import importlib
         import gemini_srt_translator as gst
         importlib.reload(gst)
-        # Apply provided params (ignore failures)
         for k, v in (params or {}).items():
             try:
                 setattr(gst, k, v)
@@ -1202,7 +1626,6 @@ def _run_translate_worker(params: dict, input_file: str, output_file: str, resul
         gst.translate()
         result_queue.put(("ok", input_file, ""))
     except Exception as e:
-        # Return the exception string to the parent
         result_queue.put(("error", input_file, str(e)))
 
 def _run_extract_worker(video_file: str, mode: str, isolate_voice: bool, result_queue: multiprocessing.Queue):
@@ -1246,13 +1669,265 @@ class TranslationThread(QThread):
 
             p = ctx.Process(target=_run_translate_worker, args=(self.params, input_file, output_file, result_queue))
             p.start()
-            p.join()  # wait for process to finish
 
-            # attempt to get result (guarded)
+            # Read messages from the worker as it runs so we can emit progress.
+            final_status = None
+            # State for console progress rendering
+            current_total = None
+            current_model = None
+            last_bar_len = 0
+            displayed_cumulative = 0
+            last_payload_size = None
+            prev_payload_size = None
+            last_llm_log = ""
+            last_reason = ""
+            while True:
+                try:
+                    msg = result_queue.get(timeout=0.5)
+                except Exception:
+                    # No message available right now.
+                    if p.is_alive():
+                        continue
+                    else:
+                        break
+
+                if not isinstance(msg, (list, tuple)) or len(msg) == 0:
+                    continue
+                tag = msg[0]
+                if tag == "start":
+                    # msg format: ("start", input_file, total_items, model_name)
+                    try:
+                        _, _fname, total_items, model_name = msg
+                        current_total = total_items
+                        current_model = model_name
+                        if current_total:
+                            print(f"Starting translation of {current_total} lines...")
+                            print(f"Using {current_model}")
+                            # Render initial empty progress bar immediately.
+                            try:
+                                frac = 0.0
+                                pct = 0
+                                bar_width = 30
+                                filled = 0
+                                bar = "|" + ("█" * filled) + ("░" * (bar_width - filled)) + "|"
+                                if last_payload_size:
+                                    if prev_payload_size and prev_payload_size != last_payload_size:
+                                        payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                    else:
+                                        payload_info = f" payload {last_payload_size}"
+                                else:
+                                    payload_info = ""
+                                reason_text = f" - {last_reason}" if last_reason else (f" - {last_llm_log}" if last_llm_log else "")
+                                out = f"Translating: {bar} {pct}% (0/{current_total}){payload_info}{reason_text}"
+                                pad = max(0, last_bar_len - len(out))
+                                try:
+                                    print(out + (" " * pad), end="\r", flush=True)
+                                except Exception:
+                                    print(out, end="\r", flush=True)
+                                last_bar_len = len(out) + pad
+                            except Exception:
+                                pass
+                        else:
+                            print(f"Starting translation...")
+                            print(f"Using {current_model}")
+                    except Exception:
+                        pass
+                elif tag == "progress":
+                    # msg format: ("progress", input_file, batch_index, cumulative_items)
+                    try:
+                        _, _fname, batch_index, cumulative = msg
+                        # Update GUI title: show committed/total instead of batch index
+                        if current_total:
+                            self.progress.emit(idx, total, f"{os.path.basename(input_file)} ({displayed_cumulative}/{current_total})")
+                        else:
+                            self.progress.emit(idx, total, f"{os.path.basename(input_file)} (batch {batch_index})")
+
+                        # Ensure displayed_cumulative reflects committed cumulative
+                        displayed_cumulative = max(displayed_cumulative, cumulative)
+
+                        # Render a console progress bar if we have a total estimate
+                        if current_total and current_total > 0:
+                            frac = min(1.0, float(displayed_cumulative) / float(current_total))
+                            pct = int(frac * 100)
+                            bar_width = 30
+                            filled = int(frac * bar_width)
+                            bar = "|" + ("█" * filled) + ("░" * (bar_width - filled)) + "|"
+                            if last_payload_size:
+                                if prev_payload_size and prev_payload_size != last_payload_size:
+                                    payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                else:
+                                    payload_info = f" payload {last_payload_size}"
+                            else:
+                                payload_info = ""
+                            reason_text = f" - {last_reason}" if last_reason else (f" - {last_llm_log}" if last_llm_log else "")
+                            out = f"Translating: {bar} {pct}% ({displayed_cumulative}/{current_total}){payload_info}{reason_text}"
+                            try:
+                                pad = max(0, last_bar_len - len(out))
+                                print(out + (" " * pad), end="\r", flush=True)
+                                last_bar_len = len(out) + pad
+                            except Exception:
+                                pass
+                        else:
+                            try:
+                                if last_payload_size:
+                                    if prev_payload_size and prev_payload_size != last_payload_size:
+                                        payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                    else:
+                                        payload_info = f" payload {last_payload_size}"
+                                else:
+                                    payload_info = ""
+                                reason_text = f" - {last_reason}" if last_reason else (f" - {last_llm_log}" if last_llm_log else "")
+                                print(f"Translating batch {batch_index} (committed {displayed_cumulative} items){payload_info}{reason_text}...")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                elif tag == "partial":
+                    # msg format: ("partial", input_file, count)
+                    try:
+                        _, _fname, count = msg
+                        displayed_cumulative += int(count)
+                        # Cap at current_total if known
+                        if current_total and displayed_cumulative > current_total:
+                            displayed_cumulative = current_total
+                        # Update GUI title with partial progress
+                        if current_total:
+                            self.progress.emit(idx, total, f"{os.path.basename(input_file)} ({displayed_cumulative}/{current_total})")
+                        else:
+                            self.progress.emit(idx, total, f"{os.path.basename(input_file)} (partial {displayed_cumulative})")
+                        # Render console bar for partials
+                        if current_total and current_total > 0:
+                            frac = min(1.0, float(displayed_cumulative) / float(current_total))
+                            pct = int(frac * 100)
+                            bar_width = 30
+                            filled = int(frac * bar_width)
+                            bar = "|" + ("█" * filled) + ("░" * (bar_width - filled)) + "|"
+                            if last_payload_size:
+                                if prev_payload_size and prev_payload_size != last_payload_size:
+                                    payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                else:
+                                    payload_info = f" payload {last_payload_size}"
+                            else:
+                                payload_info = ""
+                            reason_text = f" - {last_reason}" if last_reason else (f" - {last_llm_log}" if last_llm_log else "")
+                            out = f"Translating: {bar} {pct}% ({displayed_cumulative}/{current_total}){payload_info}{reason_text}"
+                            try:
+                                pad = max(0, last_bar_len - len(out))
+                                print(out + (" " * pad), end="\r", flush=True)
+                                last_bar_len = len(out) + pad
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                elif tag == "debug":
+                    # Capture debug messages emitted by the worker and store
+                    # latest payload size and a short LLM log instead of
+                    # printing raw debug lines.
+                    try:
+                        _, _fname, dbg = msg
+                        # Examples of dbg:
+                        # "Calling _ollama_translate_batch for payload size 50, depth=6"
+                        # "_ollama_translate_batch returned list len=25"
+                        # "_ollama_translate_batch returned non-list"
+                        m = re.search(r"payload size (\d+)", dbg)
+                        if m:
+                            prev_payload_size = last_payload_size
+                            last_payload_size = int(m.group(1))
+                        # store full reason text for short display
+                        last_reason = str(dbg)
+                        m2 = re.search(r"returned list len=(\d+)", dbg)
+                        if m2:
+                            last_llm_log = f"returned list len={m2.group(1)}"
+                        elif "returned non-list" in dbg.lower():
+                            last_llm_log = "returned non-list"
+                        elif "returned" in dbg.lower():
+                            # Strip any leading function/identifier before the 'returned' phrase
+                            idx = dbg.lower().find("returned")
+                            last_llm_log = dbg[idx:].strip()
+                        else:
+                            # Generic short debug
+                            last_llm_log = dbg.strip()
+                    except Exception:
+                        pass
+                elif tag == "reason":
+                    try:
+                        _, _fname, reason = msg
+                        # Parse a numeric payload size from the reason text like "reduced to 25"
+                        m = re.search(r"(\d+)", str(reason))
+                        if m:
+                            prev_payload_size = last_payload_size
+                            last_payload_size = int(m.group(1))
+                        last_reason = str(reason)
+                        # Force re-render of the progress line so payload/LLM log
+                        # update is visible even if percent hasn't changed.
+                        try:
+                            if current_total and current_total > 0:
+                                frac = min(1.0, float(displayed_cumulative) / float(current_total))
+                                pct = int(frac * 100)
+                                bar_width = 30
+                                filled = int(frac * bar_width)
+                                bar = "|" + ("█" * filled) + ("░" * (bar_width - filled)) + "|"
+                                if last_payload_size:
+                                    if prev_payload_size and prev_payload_size != last_payload_size:
+                                        payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                    else:
+                                        payload_info = f" payload {last_payload_size}"
+                                else:
+                                    payload_info = ""
+                                llm_info = f" - {last_llm_log}" if last_llm_log else ""
+                                out = f"Translating: {bar} {pct}% ({displayed_cumulative}/{current_total}){payload_info}{llm_info}"
+                                pad = max(0, last_bar_len - len(out))
+                                try:
+                                    print(out + (" " * pad), end="\r", flush=True)
+                                except Exception:
+                                    print(out, end="\r", flush=True)
+                                last_bar_len = len(out) + pad
+                            else:
+                                if last_payload_size:
+                                    if prev_payload_size and prev_payload_size != last_payload_size:
+                                        payload_info = f" payload {prev_payload_size}->{last_payload_size}"
+                                    else:
+                                        payload_info = f" payload {last_payload_size}"
+                                else:
+                                    payload_info = ""
+                                llm_info = f" - {last_llm_log}" if last_llm_log else ""
+                                print(f"Translating (batch size changed) (committed {displayed_cumulative} items){payload_info}{llm_info}...")
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                elif tag == "debug":
+                    try:
+                        _, _fname, dbg = msg
+                        print(f"[worker debug] {os.path.basename(input_file)}: {dbg}")
+                    except Exception:
+                        pass
+                elif tag in ("ok", "error"):
+                    final_status = msg
+                    break
+
+            p.join()  # ensure process finished
+
+            # If we rendered an inline progress bar, finish the line so subsequent
+            # prints don't overwrite it.
+            if last_bar_len:
+                try:
+                    print()
+                except Exception:
+                    pass
+
+            # If we didn't receive a final status from the loop, try to fetch one now.
+            if final_status is None:
+                try:
+                    status_msg = result_queue.get_nowait()
+                    final_status = status_msg
+                except Exception:
+                    final_status = ("error", input_file, "No result returned from worker process")
+
             try:
-                status, fname, msg = result_queue.get_nowait()
+                status, fname, msg = final_status
             except Exception:
-                status, fname, msg = ("error", input_file, "No result returned from worker process")
+                status, fname, msg = ("error", input_file, "Malformed result from worker process")
 
             if status == "ok":
                 completed += 1
